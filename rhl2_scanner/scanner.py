@@ -175,7 +175,10 @@ class Scanner:
             await self._enrich(snap)
 
         strict = self.cfg.active_tier is RiskTier.MOMENTUM
-        result = score_token(snap, self.cfg, strict_safety=strict)
+        # Live (non-dry-run) alerts may use pragmatic safety: strict on every
+        # confirmable metric, tolerant of an unconfirmed honeypot/tax.
+        pragmatic = (not self.cfg.runtime.dry_run) and self.cfg.runtime.live_pragmatic_safety
+        result = score_token(snap, self.cfg, strict_safety=strict, pragmatic=pragmatic)
         self.storage.mark_seen(snap)
         self.storage.record_score(snap, result)
 

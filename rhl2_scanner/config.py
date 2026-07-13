@@ -229,6 +229,10 @@ class RuntimeConfig:
     paper_digest_win_multiple: float = 2.0
     # Post a "scanner online" message on startup (also serves as a wiring test).
     send_startup_message: bool = True
+    # Live alerts on a chain without a tax oracle (no GoPlus coverage, no DEX
+    # router wired): enforce every confirmable safety metric strictly, but allow
+    # an UNCONFIRMED honeypot/tax (a CONFIRMED-bad still fails). See safety_gate.
+    live_pragmatic_safety: bool = False
 
 
 @dataclass

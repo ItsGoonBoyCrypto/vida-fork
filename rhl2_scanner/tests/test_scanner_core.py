@@ -103,6 +103,24 @@ class TestScoring(unittest.TestCase):
         r = score_token(clean_token(lp_burned=None, lp_locked=None), self.cfg, strict_safety=True)
         self.assertFalse(r.safety_passed)
 
+    def test_pragmatic_allows_unconfirmed_tax_and_honeypot(self):
+        # Unknown tax + honeypot, but all confirmable facts good -> passes pragmatic.
+        snap = clean_token(buy_tax_pct=None, sell_tax_pct=None, is_honeypot=None,
+                           external_risk_score=None)
+        strict = score_token(snap, self.cfg, strict_safety=True)
+        pragma = score_token(snap, self.cfg, strict_safety=True, pragmatic=True)
+        self.assertFalse(strict.safety_passed)   # strict rejects unconfirmed tax/honeypot
+        self.assertTrue(pragma.safety_passed)     # pragmatic tolerates unknown
+
+    def test_pragmatic_still_blocks_confirmed_bad(self):
+        # A CONFIRMED honeypot or high tax must still fail, even pragmatic.
+        r1 = score_token(clean_token(is_honeypot=True), self.cfg, strict_safety=True, pragmatic=True)
+        r2 = score_token(clean_token(sell_tax_pct=25), self.cfg, strict_safety=True, pragmatic=True)
+        r3 = score_token(clean_token(mint_authority_revoked=None), self.cfg, strict_safety=True, pragmatic=True)
+        self.assertFalse(r1.safety_passed)   # confirmed honeypot
+        self.assertFalse(r2.safety_passed)   # confirmed high tax
+        self.assertFalse(r3.safety_passed)   # authority still required (confirmable)
+
 
 class TestQuickStartGate(unittest.TestCase):
     def setUp(self):

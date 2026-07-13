@@ -216,11 +216,12 @@ def score_discovery(t: TokenSnapshot, th: Thresholds, weight: float) -> Category
 # ---------------------------------------------------------------------------
 # Composite
 # ---------------------------------------------------------------------------
-def score_token(t: TokenSnapshot, cfg: Config, strict_safety: bool = True) -> ScoreResult:
+def score_token(t: TokenSnapshot, cfg: Config, strict_safety: bool = True,
+                pragmatic: bool = False) -> ScoreResult:
     th = cfg.thresholds
     w = cfg.weights.normalized()
 
-    gate = safety_gate(t, th, strict=strict_safety)
+    gate = safety_gate(t, th, strict=strict_safety, pragmatic=pragmatic)
 
     categories = [
         score_safety(t, th, w.safety),

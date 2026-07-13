@@ -46,15 +46,24 @@ def quick_start_gate(t: TokenSnapshot, th: Thresholds) -> GateResult:
     return GateResult(passed=not fails, failures=fails)
 
 
-def safety_gate(t: TokenSnapshot, th: Thresholds, strict: bool = True) -> GateResult:
+def safety_gate(t: TokenSnapshot, th: Thresholds, strict: bool = True,
+                pragmatic: bool = False) -> GateResult:
     """Full safety gate. Run after enrichment populates ``t.safety``.
 
     ``strict=True`` treats unknown (``None``) safety facts as failures.
     Set ``strict=False`` in sniper tier if you deliberately accept unverified
     facts for speed (documented risk).
+
+    ``pragmatic=True`` keeps every *confirmable* gate strict (verified contract,
+    mint/freeze revoked, LP burned/locked, top-holder & bundle ceilings) but
+    tolerates an *unconfirmed* (None) honeypot/tax/risk-score — for chains where
+    no tax oracle exists yet (e.g. a brand-new L2 without GoPlus coverage and no
+    DEX router wired). A CONFIRMED-bad value (honeypot True, tax over the cap)
+    still fails. Known-bad always loses; only "unknown" is tolerated.
     """
     s = t.safety
     fails: list[str] = []
+    tolerate_unknown = pragmatic  # honeypot/tax/score may be None under pragmatic
 
     def require_true(value, label: str) -> None:
         if value is True:
@@ -67,14 +76,14 @@ def safety_gate(t: TokenSnapshot, th: Thresholds, strict: bool = True) -> GateRe
     require_true(s.contract_verified, "contract not verified")
     if s.is_honeypot is True:
         fails.append("honeypot detected")
-    elif s.is_honeypot is None and strict:
+    elif s.is_honeypot is None and strict and not tolerate_unknown:
         fails.append("honeypot status unconfirmed")
 
     # --- Taxes ---
     for tax, label in ((s.buy_tax_pct, "buy"), (s.sell_tax_pct, "sell")):
         if tax is not None and tax > th.max_tax_pct:
             fails.append(f"{label} tax {tax:.1f}% > {th.max_tax_pct:.0f}%")
-        elif tax is None and strict:
+        elif tax is None and strict and not tolerate_unknown:
             fails.append(f"{label} tax unconfirmed")
 
     # --- Authorities ---

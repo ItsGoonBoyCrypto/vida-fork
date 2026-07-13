@@ -24,10 +24,10 @@ chain:
   excluded_holder_addresses: []
 
   # --- New-pool factory listener (optional; earliest discovery) ---
-  # Uniswap V2/V3/V4 are all live on Robinhood Chain. TODO: paste the Uniswap V2
-  # factory (PairCreated) OR V3 factory (PoolCreated) address from the explorer.
+  # RH memecoins launch mostly on Uniswap V3. TODO: paste the Uniswap V3 factory
+  # (emits PoolCreated) address from robinhoodchain.blockscout.com.
   dex_factory_address: ""
-  dex_factory_kind: "univ2"        # "univ2" | "univ3"
+  dex_factory_kind: "univ3"        # RH launchers use V3; "univ2" also supported
   pool_scan_block_lookback: 3000
   pool_scan_max_range: 5000
 
@@ -60,9 +60,16 @@ runtime:
   request_timeout_seconds: 15
   max_concurrent_enrichments: 6
   db_path: "scanner.db"
-  dry_run: true                    # start dry; flip to false once tg-test passes
+  # `paper` command always forces dry-run (calibration). This flag only governs
+  # the `run` command: false = `run` sends LIVE alerts. So: paper=calibration,
+  # run=live — the only change to go live is the start command word.
+  dry_run: false
   log_level: "INFO"
   realert_cooldown_seconds: 21600
+  # Live alerts on RH Chain today: strict on all confirmable metrics (verified,
+  # authorities revoked, LP burned, top10/holders/bundle/momentum) + router-free
+  # honeypot check; tolerates unconfirmed tax until a V3 router/oracle is wired.
+  live_pragmatic_safety: true
   paper_mode: false                # `paper` command forces this on
   paper_record_floor: 45
   paper_checkpoint_hours: [1, 6, 24]
