@@ -35,6 +35,30 @@ CREATE TABLE IF NOT EXISTS alerts (
     breakdown_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_pair ON alerts(pair_address);
+
+CREATE TABLE IF NOT EXISTS paper_trades (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    pair_address     TEXT NOT NULL,
+    token_address    TEXT,
+    symbol           TEXT,
+    chain            TEXT,
+    entry_ts         REAL NOT NULL,
+    entry_price      REAL,
+    entry_mcap       REAL,
+    entry_liq        REAL,
+    score            REAL,
+    level            TEXT,
+    safety_passed    INTEGER,
+    breakdown_json   TEXT,
+    checkpoints_json TEXT DEFAULT '{}',
+    max_mult         REAL DEFAULT 1.0,
+    min_mult         REAL DEFAULT 1.0,
+    last_price       REAL,
+    last_checked_ts  REAL,
+    settled          INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_paper_open ON paper_trades(settled);
+CREATE INDEX IF NOT EXISTS idx_paper_pair ON paper_trades(pair_address);
 """
 
 
@@ -113,6 +137,74 @@ class Storage:
             (now, snap.pair_address.lower()),
         )
         self._conn.commit()
+
+    # -- paper trading / calibration ------------------------------------
+
+    def has_open_paper_trade(self, pair_address: str) -> bool:
+        cur = self._conn.execute(
+            "SELECT 1 FROM paper_trades WHERE pair_address = ? AND settled = 0",
+            (pair_address.lower(),),
+        )
+        return cur.fetchone() is not None
+
+    def open_paper_trade(self, snap: TokenSnapshot, result: ScoreResult) -> Optional[int]:
+        """Record a would-be entry. One open trade per pair; returns row id."""
+        if self.has_open_paper_trade(snap.pair_address):
+            return None
+        now = time.time()
+        breakdown = {c.name: round(c.raw, 1) for c in result.categories}
+        cur = self._conn.execute(
+            """INSERT INTO paper_trades
+               (pair_address, token_address, symbol, chain, entry_ts, entry_price,
+                entry_mcap, entry_liq, score, level, safety_passed, breakdown_json,
+                last_price, last_checked_ts)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                snap.pair_address.lower(),
+                snap.token_address.lower(),
+                snap.symbol,
+                snap.chain,
+                now,
+                snap.price_usd,
+                snap.market_cap_usd,
+                snap.liquidity_usd,
+                result.composite,
+                result.level.value,
+                1 if result.safety_passed else 0,
+                json.dumps(breakdown),
+                snap.price_usd,
+                now,
+            ),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def open_paper_trades(self) -> list[sqlite3.Row]:
+        cur = self._conn.execute("SELECT * FROM paper_trades WHERE settled = 0")
+        return cur.fetchall()
+
+    def update_paper_trade(
+        self,
+        trade_id: int,
+        last_price: float,
+        checkpoints: dict,
+        max_mult: float,
+        min_mult: float,
+        settled: bool,
+    ) -> None:
+        self._conn.execute(
+            """UPDATE paper_trades
+               SET last_price = ?, checkpoints_json = ?, max_mult = ?, min_mult = ?,
+                   last_checked_ts = ?, settled = ?
+               WHERE id = ?""",
+            (last_price, json.dumps(checkpoints), max_mult, min_mult,
+             time.time(), 1 if settled else 0, trade_id),
+        )
+        self._conn.commit()
+
+    def all_paper_trades(self) -> list[sqlite3.Row]:
+        cur = self._conn.execute("SELECT * FROM paper_trades ORDER BY entry_ts")
+        return cur.fetchall()
 
 
 def _snap_summary(snap: TokenSnapshot) -> dict:

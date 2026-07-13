@@ -111,11 +111,15 @@ def _selfcheck(cfg: Config) -> None:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="rhl2_scanner")
-    parser.add_argument("command", choices=["run", "scan-once", "backtest", "selfcheck"])
+    parser.add_argument(
+        "command",
+        choices=["run", "scan-once", "paper", "paper-report", "backtest", "selfcheck"],
+    )
     parser.add_argument("dataset", nargs="?", help="JSONL file for backtest")
     parser.add_argument("--config", default="config/config.yaml")
     parser.add_argument("--tier", choices=["sniper", "momentum"])
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--win-multiple", type=float, default=2.0, help="paper-report win threshold")
     args = parser.parse_args(argv)
 
     cfg = _load(args)
@@ -124,6 +128,21 @@ def main(argv=None) -> int:
         asyncio.run(_run(cfg))
     elif args.command == "scan-once":
         asyncio.run(_scan_once(cfg))
+    elif args.command == "paper":
+        # Calibration mode: record would-be entries + realized outcomes, no TG.
+        cfg.runtime.paper_mode = True
+        cfg.runtime.dry_run = True
+        asyncio.run(_run(cfg))
+    elif args.command == "paper-report":
+        from .paper import PaperTrader, format_report
+        from .storage import Storage
+
+        storage = Storage(cfg.runtime.db_path)
+        try:
+            trader = PaperTrader(cfg, storage)
+            print(format_report(trader.report(win_multiple=args.win_multiple)))
+        finally:
+            storage.close()
     elif args.command == "selfcheck":
         _selfcheck(cfg)
     elif args.command == "backtest":

@@ -24,6 +24,7 @@ from .bundle import BundleAnalyzer
 from .config import Config
 from .filters import quick_start_gate, safety_gate
 from .models import AlertLevel, RiskTier, ScoreResult, TokenSnapshot
+from .paper import PaperTrader
 from .scoring import score_token
 from .sources.chain import EvmChainClient
 from .sources.dexscreener import DexScreenerClient
@@ -47,6 +48,7 @@ class Scanner:
         # PoolListener is stateful (tracks last scanned block) so it persists
         # across cycles; bound to the shared session in run_forever/scan-once.
         self._listener: Optional[PoolListener] = None
+        self.paper = PaperTrader(cfg, self.storage) if cfg.runtime.paper_mode else None
 
     # -- lifecycle -------------------------------------------------------
 
@@ -115,6 +117,16 @@ class Scanner:
 
         tasks = [self._process(snap) for snap in candidates]
         results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Re-price open paper positions and record any reached checkpoints.
+        if self.paper is not None:
+            try:
+                settled = await self.paper.settle_open(dex)
+                if settled:
+                    log.info("paper: settled %d positions this cycle", settled)
+            except Exception:
+                log.exception("paper settle failed")
+
         return [r for r in results if isinstance(r, ScoreResult)]
 
     async def _process(self, snap: TokenSnapshot) -> Optional[ScoreResult]:
@@ -125,6 +137,11 @@ class Scanner:
         result = score_token(snap, self.cfg, strict_safety=strict)
         self.storage.mark_seen(snap)
         self.storage.record_score(snap, result)
+
+        # Paper mode records would-be entries (incl. below the alert band) for
+        # calibration; it does not gate on cooldown so every candidate is logged.
+        if self.paper is not None:
+            self.paper.record(snap, result)
 
         if result.level in (AlertLevel.STRONG, AlertLevel.WATCH):
             if self.storage.in_cooldown(snap.pair_address, self.cfg.runtime.realert_cooldown_seconds):

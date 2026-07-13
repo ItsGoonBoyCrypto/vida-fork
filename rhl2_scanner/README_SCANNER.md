@@ -26,7 +26,9 @@ plumbing is functional but must be pointed at RH L2's live endpoints.
 | DexScreener client (discovery + market/volume/tx) | ✅ real API client¹ |
 | SQLite persistence (dedupe, cooldown, alert history) | ✅ complete |
 | Telegram notifier + `/status /tier /set /addwallet` commands | ✅ complete² |
+| **Paper-trading / live calibration mode** | ✅ records would-be entries, re-prices at 1h/6h/24h, win-rate by band |
 | Backtest / historical replay harness | ✅ harness done; supply your dataset |
+| Turnkey Base config + `.env` + Dockerfile | ✅ run the full pipeline live today |
 | EVM chain client (verify, authorities, LP-burn, holders) | ⚙️ works on standard EVM; **set RH L2 rpc/explorer** |
 | **RugCheck-style safety (GoPlus) integration** | ✅ real client + parser³ |
 | **Honeypot / tax on-chain simulation** | ✅ eth_call + stateOverride sell-sim (RPC-only)⁴ |
@@ -103,6 +105,7 @@ rhl2_scanner/
   contracts/HoneypotSimulator.sol   buy+sell simulator (runtime bytecode via stateOverride)
   storage.py         SQLite: seen tokens, alert history, re-alert cooldown
   scanner.py         async orchestration loop
+  paper.py           paper-trading recorder + settler + calibration report
   backtest.py        historical replay -> alert precision
   sources/
     base.py          PairSource / SafetySource / DistributionSource / SmartMoneySource
@@ -124,26 +127,32 @@ rhl2_scanner/
 
 ## Quick start
 
+**See `QUICKSTART.md` for the copy-paste path** (turnkey Base config so the full
+pipeline runs live today, plus exactly what secrets you need to supply).
+
 ```bash
 pip install -r rhl2_scanner/requirements.txt
 
 # 1) smoke-test the scoring engine offline (no network, no config):
 python -m rhl2_scanner selfcheck
 
-# 2) configure
-cp rhl2_scanner/config/config.example.yaml rhl2_scanner/config/config.yaml
-#   edit chain.rpc_url / explorer_api_url; set dexscreener_chain to "base"
-#   to try it live today. Secrets can go in env instead:
-export TELEGRAM_BOT_TOKEN=... TELEGRAM_ALERT_CHAT_ID=... RHL2_RPC_URL=...
+# 2) turnkey live config on Base (fully indexed by DexScreener + GoPlus):
+cp rhl2_scanner/config/base.example.yaml rhl2_scanner/config/config.yaml
+cp rhl2_scanner/.env.example rhl2_scanner/.env         # add secrets here (auto-loaded)
 
-# 3) dry-run a single cycle (prints would-be alerts):
+# 3) one live discovery+score cycle, dry-run (prints would-be alerts):
 python -m rhl2_scanner scan-once --config rhl2_scanner/config/config.yaml
 
-# 4) run the live loop:
+# 4) CALIBRATION: record would-be entries + realized 1h/6h/24h outcomes:
+python -m rhl2_scanner paper --config rhl2_scanner/config/config.yaml
+#    ...then read win-rate by score band:
+python -m rhl2_scanner paper-report --config rhl2_scanner/config/config.yaml
+
+# 5) go live (needs Telegram token + chat id):
 python -m rhl2_scanner run --config rhl2_scanner/config/config.yaml --tier momentum
 ```
 
-Run tests: `python -m unittest discover -s rhl2_scanner/tests -v`
+Run tests: `python -m unittest discover -s rhl2_scanner/tests -v`  (39 tests)
 
 `selfcheck` prints a fully-scored synthetic token in the exact alert format:
 

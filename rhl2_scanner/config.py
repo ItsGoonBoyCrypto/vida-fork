@@ -213,6 +213,15 @@ class RuntimeConfig:
     # Re-alert suppression: don't re-alert the same token within this window.
     realert_cooldown_seconds: float = 6 * 3600
 
+    # --- Paper trading / calibration ---
+    paper_mode: bool = False                   # record would-be entries + realized outcomes
+    # Record any safety-passing candidate at/above this composite (below the
+    # watch band too) so calibration can see where the alert band *should* be.
+    paper_record_floor: float = 45.0
+    # Hours after entry to snapshot realized price. Last value = when settled.
+    paper_checkpoint_hours: list = field(default_factory=lambda: [1, 6, 24])
+    paper_settle_batch: int = 25               # max open trades to re-price per cycle
+
 
 @dataclass
 class Config:
@@ -263,7 +272,13 @@ class Config:
             self.smart_money_wallets = [w.lower() for w in wallets]
 
     def _apply_env(self) -> None:
-        """Secrets and overrides from env take precedence over file."""
+        """Secrets and overrides from env take precedence over file.
+
+        A ``.env`` file in the working directory is loaded first (without
+        overriding already-set process env), so secrets never need to live in
+        the YAML config or the repo.
+        """
+        _load_dotenv()
         env = os.environ
         if v := env.get("RHL2_RPC_URL"):
             self.chain.rpc_url = v
@@ -271,12 +286,33 @@ class Config:
             self.chain.explorer_api_key = v
         if v := env.get("RHL2_EXPLORER_API_URL"):
             self.chain.explorer_api_url = v
+        if v := env.get("RHL2_SIMULATOR_BYTECODE"):
+            self.chain.honeypot_simulator_bytecode = v
         if v := env.get("TELEGRAM_BOT_TOKEN"):
             self.telegram.bot_token = v
         if v := env.get("TELEGRAM_ALERT_CHAT_ID"):
             self.telegram.alert_chat_id = v
         if v := env.get("RHL2_DRY_RUN"):
             self.runtime.dry_run = v.lower() in ("1", "true", "yes")
+        if v := env.get("RHL2_DB_DIR"):
+            self.runtime.db_path = os.path.join(v, os.path.basename(self.runtime.db_path))
+
+
+def _load_dotenv(path: str = ".env") -> None:
+    """Minimal, dependency-free .env loader (KEY=VALUE lines; # comments)."""
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key, value = key.strip(), value.strip().strip('"').strip("'")
+                os.environ.setdefault(key, value)
+    except OSError:
+        pass
 
 
 def _fill(obj: Any, data: dict[str, Any]) -> None:

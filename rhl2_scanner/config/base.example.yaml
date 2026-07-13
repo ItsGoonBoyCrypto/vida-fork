@@ -1,0 +1,77 @@
+# TURNKEY PROVING-GROUND CONFIG — Base mainnet (an EVM L2 that is fully indexed
+# today by DexScreener + GoPlus). Use this to run the COMPLETE pipeline live
+# now — discovery, GoPlus safety, honeypot sim, LP-lock, scoring, paper mode —
+# while RH L2's own endpoints firm up. Retarget to RH L2 by swapping the chain
+# block; nothing else changes.
+#
+#   cp rhl2_scanner/config/base.example.yaml rhl2_scanner/config/config.yaml
+#   python -m rhl2_scanner paper --config rhl2_scanner/config/config.yaml
+#
+# ⚠️ VERIFY every address against the official source before trusting it with
+# real decisions — addresses below are the well-known Base deployments but you
+# should confirm them.
+
+chain:
+  name: base
+  chain_id: 8453
+  # Public Base RPC (swap for a private/faster provider for production).
+  rpc_url: "https://mainnet.base.org"
+  # Basescan Etherscan-style API (set BASESCAN key via env RHL2_EXPLORER_API_KEY).
+  explorer_api_url: "https://api.basescan.org/api"
+  explorer_api_key: ""
+  dexscreener_chain: "base"
+  native_symbol: "ETH"
+  weth_address: "0x4200000000000000000000000000000000000006"
+  excluded_holder_addresses: []
+
+  # Uniswap V2 on Base (verify): factory emits PairCreated; router for sell-sim.
+  dex_factory_address: "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6"
+  dex_factory_kind: "univ2"
+  dex_router_address: "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24"
+  pool_scan_block_lookback: 3000
+  pool_scan_max_range: 5000
+
+  # Exact-tax simulator: compile contracts/HoneypotSimulator.sol and paste the
+  # runtime bytecode here (or via env RHL2_SIMULATOR_BYTECODE). Empty is fine —
+  # falls back to the boolean sell-sim + GoPlus taxes.
+  honeypot_simulator_bytecode: ""
+  honeypot_sim_amount_wei: 10000000000000000
+
+  # GoPlus covers Base (chain id 8453) — gives authorities, taxes, honeypot, LP.
+  goplus_chain_id: "8453"
+  goplus_api_url: "https://api.gopluslabs.io/api/v1/token_security"
+  honeypot_api_url: ""
+
+  # Add known Base LP lockers here to detect lock + duration.
+  lp_locker_addresses: []
+  lp_lock_min_fraction: 0.5
+  lp_lockers: []
+
+weights:
+  safety: 0.38
+  distribution: 0.20
+  momentum: 0.25
+  discovery: 0.17
+
+active_tier: momentum
+
+runtime:
+  poll_interval_seconds: 30
+  request_timeout_seconds: 15
+  max_concurrent_enrichments: 6
+  db_path: "scanner.db"
+  dry_run: true              # start in dry-run; flip to false once TG is set
+  log_level: "INFO"
+  realert_cooldown_seconds: 21600
+  # Paper-mode calibration
+  paper_mode: false          # `python -m rhl2_scanner paper` forces this on
+  paper_record_floor: 45
+  paper_checkpoint_hours: [1, 6, 24]
+  paper_settle_batch: 25
+
+telegram:
+  bot_token: ""              # env TELEGRAM_BOT_TOKEN
+  alert_chat_id: ""          # env TELEGRAM_ALERT_CHAT_ID
+  admin_user_ids: []
+
+smart_money_wallets: []
