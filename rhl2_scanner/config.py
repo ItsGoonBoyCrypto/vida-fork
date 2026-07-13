@@ -43,9 +43,32 @@ class ChainConfig:
     # DexScreener chain slug. RH L2 slug TBD; "base" works as an adaptable example.
     dexscreener_chain: str = "robinhood"
     native_symbol: str = "ETH"
-    weth_address: str = ""                             # wrapped-native for pair math
+    weth_address: str = ""                             # wrapped-native for pair/router math
     # Addresses excluded from holder-distribution math (LP pools, burn, locker)
     excluded_holder_addresses: list[str] = field(default_factory=list)
+
+    # --- New-pool factory listener (earliest discovery) ---
+    # UniswapV2-style factory emitting PairCreated, and/or a V3 factory emitting
+    # PoolCreated. Set the RH L2 DEX's factory address to catch pairs the moment
+    # liquidity is added, before DexScreener indexes them.
+    dex_factory_address: str = ""
+    dex_factory_kind: str = "univ2"                    # "univ2" | "univ3"
+    pool_scan_block_lookback: int = 3000               # blocks to backfill on first poll
+    pool_scan_max_range: int = 5000                    # cap per eth_getLogs call
+
+    # --- Swap simulation (honeypot / tax) ---
+    dex_router_address: str = ""                       # UniV2-style router for sell sim
+
+    # --- Third-party safety API (RugCheck-equivalent for EVM) ---
+    # GoPlus Security token-security API is the de-facto EVM analog to RugCheck.
+    # It keys chains by decimal chain id as a string (e.g. "8453" for Base).
+    goplus_chain_id: str = ""
+    goplus_api_url: str = "https://api.gopluslabs.io/api/v1/token_security"
+    # honeypot.is-compatible endpoint (optional cross-check / RH L2 fallback).
+    honeypot_api_url: str = ""
+
+    # Known LP locker contracts on this chain (LP held here counts as "locked").
+    lp_locker_addresses: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

@@ -27,6 +27,8 @@ from .models import AlertLevel, RiskTier, ScoreResult, TokenSnapshot
 from .scoring import score_token
 from .sources.chain import EvmChainClient
 from .sources.dexscreener import DexScreenerClient
+from .sources.poollistener import PoolListener
+from .sources.safety import CompositeSafetySource
 from .sources.smartmoney import SmartMoneyClient
 from .storage import Storage
 from .alerting.telegram import TelegramNotifier
@@ -42,6 +44,9 @@ class Scanner:
         self._sem = asyncio.Semaphore(cfg.runtime.max_concurrent_enrichments)
         self._session: Optional[aiohttp.ClientSession] = None
         self._stop = asyncio.Event()
+        # PoolListener is stateful (tracks last scanned block) so it persists
+        # across cycles; bound to the shared session in run_forever/scan-once.
+        self._listener: Optional[PoolListener] = None
 
     # -- lifecycle -------------------------------------------------------
 
@@ -76,8 +81,33 @@ class Scanner:
     async def run_once(self) -> list[ScoreResult]:
         assert self._session is not None
         dex = DexScreenerClient(self.cfg, session=self._session)
-        pairs = await dex.fetch_new_pairs()
-        log.info("discovered %d pairs", len(pairs))
+        if self._listener is None:
+            self._listener = PoolListener(self.cfg, session=self._session)
+
+        # Two discovery streams: DexScreener (indexed) + factory logs (earliest).
+        dex_pairs, fresh_pairs = await asyncio.gather(
+            dex.fetch_new_pairs(),
+            self._listener.poll_new_pairs(),
+        )
+
+        # Merge, DexScreener winning on overlap (it carries market data). For
+        # factory-only stubs, try to backfill market data from DexScreener.
+        merged: dict[str, TokenSnapshot] = {}
+        for p in fresh_pairs:
+            merged[p.pair_address.lower()] = p
+        for p in dex_pairs:
+            merged[p.pair_address.lower()] = p
+        for key, snap in list(merged.items()):
+            if snap.liquidity_usd is None and snap.market_cap_usd is None:
+                for filled in await dex.pairs_for_token(snap.token_address):
+                    if filled.pair_address.lower() == key:
+                        merged[key] = filled
+                        break
+        pairs = list(merged.values())
+        log.info(
+            "discovered %d pairs (dexscreener=%d, factory=%d)",
+            len(pairs), len(dex_pairs), len(fresh_pairs),
+        )
 
         th = self.cfg.thresholds
         candidates = [p for p in pairs if quick_start_gate(p, th).passed]
@@ -115,6 +145,7 @@ class Scanner:
         configured simply leaves its facts unknown.
         """
         assert self._session is not None
+        safety = CompositeSafetySource(self.cfg, session=self._session)
         chain = EvmChainClient(self.cfg, session=self._session)
         bundle = BundleAnalyzer(self.cfg, session=self._session)
         smart = SmartMoneyClient(self.cfg, session=self._session)
@@ -126,13 +157,18 @@ class Scanner:
                 log.debug("enrichment source failed: %s", exc)
                 return None
 
-        # Safety report first (needed by the gate); then parallel distribution/bundle/smart.
-        report = await _safe(chain.assess(snap))
+        # Composite safety (GoPlus + on-chain + honeypot sim) merged conservatively.
+        # Bundle analysis also writes into snap.safety, so run it first, then
+        # overlay the merged report while preserving bundle fields.
+        await _safe(bundle.enrich(snap))
+        report = await _safe(safety.assess(snap))
         if report is not None:
+            # keep bundle facts already computed
+            report.bundle_supply_pct = report.bundle_supply_pct or snap.safety.bundle_supply_pct
+            report.sniper_cluster_pct = report.sniper_cluster_pct or snap.safety.sniper_cluster_pct
             snap.safety = report
 
         await asyncio.gather(
             _safe(chain.enrich_distribution(snap)),
-            _safe(bundle.enrich(snap)),
             _safe(smart.active_wallets(snap)),
         )

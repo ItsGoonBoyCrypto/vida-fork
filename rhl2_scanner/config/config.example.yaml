@@ -13,8 +13,24 @@ chain:
   # against a live, indexed EVM L2 until RH L2 is listed.
   dexscreener_chain: "base"
   native_symbol: "ETH"
-  weth_address: ""
+  weth_address: ""                # wrapped-native; needed for swap sim + pool listener
   excluded_holder_addresses: []   # LP pools, lockers, treasury to exclude from top-holder math
+
+  # --- New-pool factory listener (earliest discovery) ---
+  dex_factory_address: ""         # UniV2/V3-style factory emitting PairCreated/PoolCreated
+  dex_factory_kind: "univ2"       # "univ2" | "univ3"
+  pool_scan_block_lookback: 3000  # blocks to backfill on first poll
+  pool_scan_max_range: 5000       # cap per eth_getLogs call
+
+  # --- Swap simulation (honeypot / tax) ---
+  dex_router_address: ""          # UniV2-style router for the sell simulation
+
+  # --- Third-party safety (RugCheck-equivalent for EVM) ---
+  goplus_chain_id: ""             # GoPlus decimal chain id as string, e.g. "8453" (Base). Empty = skip.
+  goplus_api_url: "https://api.gopluslabs.io/api/v1/token_security"
+  honeypot_api_url: ""            # optional honeypot.is-compatible endpoint (cross-check / RH L2 fallback)
+
+  lp_locker_addresses: []         # LP held at these addresses counts as "locked"
 
 weights:            # composite category weights (auto-normalized)
   safety: 0.38

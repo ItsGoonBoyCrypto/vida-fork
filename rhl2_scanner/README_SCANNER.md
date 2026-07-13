@@ -28,12 +28,35 @@ plumbing is functional but must be pointed at RH L2's live endpoints.
 | Telegram notifier + `/status /tier /set /addwallet` commands | ✅ complete² |
 | Backtest / historical replay harness | ✅ harness done; supply your dataset |
 | EVM chain client (verify, authorities, LP-burn, holders) | ⚙️ works on standard EVM; **set RH L2 rpc/explorer** |
-| Honeypot / tax simulation | 🔌 hook stubbed — wire a simulator or honeypot API |
-| New-pool log listener (earliest detection) | 🔌 stub — needs RH L2 DEX factory address |
+| **RugCheck-style safety (GoPlus) integration** | ✅ real client + parser³ |
+| **Honeypot / tax on-chain simulation** | ✅ eth_call + stateOverride sell-sim (RPC-only)⁴ |
+| **New-pool factory listener (earliest detection)** | ✅ real eth_getLogs polling (UniV2 + V3)⁵ |
+| Dependency-free Keccak-256 (topics + storage slots) | ✅ verified against EVM vectors |
 
 ¹ DexScreener must index RH L2 for its slug to return data. Until then set
 `chain.dexscreener_chain: "base"` to exercise the full pipeline against a live L2.
 ² Requires `python-telegram-bot`; without it the notifier prints alerts to stdout.
+³ GoPlus is the de-facto EVM analog to RugCheck (authorities, taxes, honeypot,
+LP lock/burn, holders, risk flags in one call). Set `chain.goplus_chain_id`. If
+GoPlus doesn't cover RH L2 yet, the on-chain sources below fill the gap.
+⁴ Simulates a sell via `eth_call` + `stateOverride` (detects the balance/allowance
+storage slots, credits a burner, calls the router's fee-supporting sell) — needs
+only `rpc_url` + `dex_router_address` + `weth_address`, no third party, no deployed
+contract. Reliable **sellability/honeypot** signal; exact tax magnitude still comes
+from GoPlus / a honeypot.is-style API (`honeypot_api_url`).
+⁵ Polls the DEX factory's `PairCreated`/`PoolCreated` logs so tokens are caught
+the moment liquidity is added, before DexScreener indexes them. Set
+`dex_factory_address` + `dex_factory_kind`.
+
+### How the three safety signals combine
+
+`CompositeSafetySource` runs GoPlus + the on-chain EVM client + the honeypot
+simulator concurrently and merges them **pessimistically** (`sources/safety.py`):
+a fact is only credited safe when a source confirms it and none contradicts it;
+any single credible red flag (honeypot, high tax, un-revoked authority) sinks the
+token. Unknown facts stay unknown — and the strict gate treats unknown as fail.
+This is what lets the scanner run safely on a new L2 where no single provider has
+full coverage.
 
 **Robinhood Chain note:** RH's L2 (announced 2025, built on Arbitrum Orbit — EVM)
 may not yet have public DexScreener/RugCheck coverage or finalized chain id / RPC.
@@ -47,9 +70,10 @@ drop in real values without code changes. Retargeting to Base = change two lines
 ```
 discover ─► quick-start gate ─► enrich (concurrent) ─► safety gate ─► score ─► alert + persist
    │              │                    │                    │           │            │
-DexScreener   cheap pre-      chain(safety, holders)   hard rug      weighted    Telegram +
-+ (chain      screen on       bundle analysis          filters       0–100       SQLite
-  listener)   feed data       smart-money match        (skip on fail)            (cooldown)
+DexScreener   cheap pre-      GoPlus + on-chain +      hard rug      weighted    Telegram +
++ factory     screen on       honeypot sim (merged);   filters       0–100       SQLite
+  log         feed data       holders, bundle,         (skip on fail)            (cooldown)
+  listener                    smart-money
 ```
 
 Confluence rule: **any safety-gate failure forces SKIP and zeroes the composite**,
@@ -64,6 +88,8 @@ rhl2_scanner/
   filters.py         quick_start_gate + safety_gate (hard rug filters)
   scoring.py         weighted composite engine (spec §3)
   bundle.py          same-block + common-funder cluster detection (pure fn + client)
+  keccak.py          dependency-free Keccak-256 + EVM slot/topic helpers
+  simulator.py       honeypot/tax on-chain sell-simulation (eth_call + stateOverride)
   storage.py         SQLite: seen tokens, alert history, re-alert cooldown
   scanner.py         async orchestration loop
   backtest.py        historical replay -> alert precision
@@ -71,6 +97,9 @@ rhl2_scanner/
     base.py          PairSource / SafetySource / DistributionSource / SmartMoneySource
     dexscreener.py   real DexScreener client
     chain.py         EVM RPC + explorer (verify, authorities, LP, holders)
+    goplus.py        GoPlus token-security client (RugCheck-equivalent)
+    safety.py        CompositeSafetySource — merges GoPlus + on-chain + simulator
+    poollistener.py  new-pool factory log listener (earliest discovery)
     smartmoney.py    curated wallet matcher
   alerting/
     formatter.py     spec §4 alert rendering
@@ -148,11 +177,21 @@ Alert bands (momentum tier): **≥75 = Strong**, **60–74 = Watch**, **<60 / sa
 
 1. `chain.chain_id`, `chain.rpc_url`, `chain.explorer_api_url` (+ key).
 2. `chain.dexscreener_chain` once RH L2 is indexed by DexScreener.
-3. `chain.excluded_holder_addresses` — LP pools, lockers, treasury.
-4. Implement `EvmChainClient._simulate_taxes` (honeypot API or eth_call buy/sell sim).
-5. LP-lock detection: add known RH L2 locker addresses in `chain.py`.
-6. `EvmChainClient.iter_new_pools` — subscribe to the DEX factory `PairCreated`
-   event for sub-DexScreener-latency discovery.
+3. `chain.excluded_holder_addresses` / `chain.lp_locker_addresses` — LP pools,
+   lockers, treasury.
+4. **Honeypot/tax:** set `chain.dex_router_address` + `chain.weth_address` for the
+   on-chain sell-simulation. Optionally set `chain.honeypot_api_url` for exact tax %.
+5. **RugCheck-style:** set `chain.goplus_chain_id` if GoPlus covers RH L2 (decimal
+   chain id as string); otherwise the on-chain sources carry safety on their own.
+6. **New-pool listener:** set `chain.dex_factory_address` + `chain.dex_factory_kind`
+   (`univ2`/`univ3`) for sub-DexScreener-latency discovery.
 7. Populate `smart_money_wallets` with your curated high-win-rate list.
 8. Archive live snapshots to JSONL and use `backtest` to tune thresholds by win rate.
+
+### Still needs a live endpoint / operator input
+- **Exact buy/sell tax magnitude on-chain** — the sell-sim gives a reliable
+  *sellable / honeypot* boolean; precise tax needs `honeypot_api_url` or a deployed
+  buy+sell simulator contract. GoPlus supplies tax % where it has coverage.
+- **LP-lock *duration*** — burn is detected on-chain; remaining lock time needs the
+  specific locker contract's ABI (add under `lp_locker_addresses` + a reader).
 ```

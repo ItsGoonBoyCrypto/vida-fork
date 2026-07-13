@@ -165,14 +165,9 @@ class EvmChainClient:
         return (burned / supply) > 0.90
 
     async def _simulate_taxes(self, snap: TokenSnapshot, report: SafetyReport) -> None:
-        """Hook for buy/sell tax + honeypot simulation.
-
-        Intentionally a no-op stub: leaves buy_tax/sell_tax/is_honeypot as
-        None so the strict gate refuses to pass an unverified token. Wire one
-        of:
-          (a) a third-party honeypot API for RH L2, or
-          (b) an eth_call simulation: quote router.getAmountsOut for a buy,
-              simulate the swap, then simulate an immediate sell and compare.
+        """Honeypot/tax facts are produced by ``simulator.HoneypotSimulator``
+        and merged in by ``sources.safety.CompositeSafetySource``. This client
+        deliberately leaves them None so the two concerns stay decoupled.
         """
         return None
 
@@ -216,18 +211,8 @@ class EvmChainClient:
             snap.top1_supply_pct = 100.0 * non_lp[0][1] / total
         return snap
 
-    # -- New-pool listener (discovery complement) -----------------------
-
-    async def iter_new_pools(self):
-        """Placeholder for a factory PairCreated/PoolCreated log subscription.
-
-        For earliest possible detection, subscribe to the DEX factory's
-        creation event via eth_subscribe (WS) or poll eth_getLogs. Requires
-        the RH L2 DEX factory address + event signature. Yields nothing until
-        configured; DexScreener discovery covers the gap in the meantime.
-        """
-        return
-        yield  # pragma: no cover - marks this an async generator
+    # New-pool discovery is implemented in ``sources.poollistener.PoolListener``
+    # (real eth_getLogs polling of the DEX factory PairCreated/PoolCreated event).
 
 
 def _to_float(x: Any) -> Optional[float]:
