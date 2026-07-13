@@ -45,6 +45,11 @@ _SEL_ALLOWANCE = "dd62ed3e"
 _SEL_DECIMALS = "313ce567"
 _SEL_SWAP_FEE = "791ac947"   # swapExactTokensForETHSupportingFeeOnTransferTokens
 _SEL_GET_AMOUNTS_OUT = "d06ca61f"
+# Uniswap V3 SwapRouter02.exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))
+# — derived at runtime so it can't drift from the ABI.
+_SEL_V3_EXACT_IN_SINGLE = keccak256(
+    b"exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))"
+)[:4].hex()
 
 
 def _w(x: int | str) -> str:
@@ -203,6 +208,19 @@ class HoneypotSimulator:
                 nested_mapping_slot(BURNER, router, allow_slot)
             ] = "0x" + _w(_BIG)
 
+        if chain.dex_router_kind == "univ3":
+            # V3: try each configured fee tier. A successful sell = sellable.
+            # All tiers reverting is ambiguous (could just be the wrong tier),
+            # so fall back to the router-free transfer check rather than crying
+            # honeypot on a legit token.
+            sold = await self._v3_sell_ok(token, weth, router, amount_in, overrides)
+            if sold is True:
+                report.is_honeypot = False
+            else:
+                report.is_honeypot = await self._transfer_restricted(token, bal_slot)
+            return
+
+        # V2: single pool per pair, so a revert is a meaningful "can't sell".
         data = (
             "0x" + _SEL_SWAP_FEE
             + _w(amount_in)            # amountIn
@@ -220,6 +238,33 @@ class HoneypotSimulator:
         elif status == "revert":
             report.is_honeypot = True
         # status "error" (rpc/no-node) -> leave None (unconfirmed)
+
+    async def _v3_sell_ok(self, token: str, weth: str, router: str,
+                          amount_in: int, overrides: dict) -> Optional[bool]:
+        """Simulate SwapRouter02.exactInputSingle(token->WETH) per fee tier.
+
+        Returns True if any tier's sell succeeds (token is sellable). Returns
+        None if every tier reverts/errors (ambiguous: wrong tier or no pool) —
+        never False, to avoid false honeypot calls on V3.
+        """
+        for fee in self.cfg.chain.dex_v3_fee_tiers:
+            # exactInputSingle((tokenIn, tokenOut, fee, recipient, amountIn,
+            #                    amountOutMinimum, sqrtPriceLimitX96))
+            # All members static -> the struct is encoded inline as 7 words.
+            data = (
+                "0x" + _SEL_V3_EXACT_IN_SINGLE
+                + _addr(token)         # tokenIn
+                + _addr(weth)          # tokenOut
+                + _w(int(fee))         # fee tier
+                + _addr(BURNER)        # recipient
+                + _w(amount_in)        # amountIn
+                + _w(0)                # amountOutMinimum
+                + _w(0)                # sqrtPriceLimitX96 (0 = no limit)
+            )
+            status, _ = await self._call_status(router, data, overrides, frm=BURNER)
+            if status == "ok":
+                return True
+        return None
 
     async def _transfer_restricted(self, token: str, bal_slot: int) -> Optional[bool]:
         """Fallback: simulate a plain transfer; revert => restricted/honeypot-ish."""

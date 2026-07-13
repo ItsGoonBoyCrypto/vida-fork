@@ -59,7 +59,9 @@ class ChainConfig:
     pool_scan_max_range: int = 5000                    # cap per eth_getLogs call
 
     # --- Swap simulation (honeypot / tax) ---
-    dex_router_address: str = ""                       # UniV2-style router for sell sim
+    dex_router_address: str = ""                       # router for the sell simulation
+    dex_router_kind: str = "univ2"                     # "univ2" | "univ3" (SwapRouter02)
+    dex_v3_fee_tiers: list = field(default_factory=lambda: [10000, 3000, 500])  # V3 pool fees to try
     # Optional buy+sell simulator contract for EXACT tax %. Supply the *runtime*
     # bytecode (solc --bin-runtime) of contracts/HoneypotSimulator.sol; it is
     # injected at honeypot_simulator_address via eth_call stateOverride `code`,
@@ -310,6 +312,8 @@ class Config:
             self.chain.dex_router_address = v
         if v := env.get("RHL2_DEX_FACTORY_KIND"):
             self.chain.dex_factory_kind = v
+        if v := env.get("RHL2_DEX_ROUTER_KIND"):
+            self.chain.dex_router_kind = v
         if v := env.get("TELEGRAM_BOT_TOKEN"):
             self.telegram.bot_token = v
         if v := env.get("TELEGRAM_ALERT_CHAT_ID"):

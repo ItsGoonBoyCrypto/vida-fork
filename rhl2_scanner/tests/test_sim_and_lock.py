@@ -109,6 +109,49 @@ class TestContractSim(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(sel), 8)
 
 
+class TestV3SellSim(unittest.IsolatedAsyncioTestCase):
+    def _cfg(self):
+        cfg = Config()
+        cfg.chain.rpc_url = "http://node"
+        cfg.chain.dex_router_address = "0x" + "1" * 40
+        cfg.chain.weth_address = "0x" + "2" * 40
+        cfg.chain.dex_router_kind = "univ3"
+        cfg.chain.dex_v3_fee_tiers = [10000, 3000]
+        return cfg
+
+    async def test_v3_selector_and_calldata_shape(self):
+        # exactInputSingle selector is 0x04e45aaf (SwapRouter02, no deadline).
+        sel = keccak256(
+            b"exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))"
+        )[:4].hex()
+        self.assertEqual(sel, "04e45aaf")
+
+    async def test_v3_sell_success_marks_not_honeypot(self):
+        cfg = self._cfg()
+        calls = {"n": 0}
+
+        def handler(payload):
+            m = payload["method"]
+            if m == "eth_call":
+                data = payload["params"][0]["data"]
+                # balance/allowance slot probes return the BIG override; decimals; swap ok
+                if data.startswith("0x70a08231") or data.startswith("0xdd62ed3e"):
+                    return "0x" + f"{10**30:064x}"      # slot found immediately
+                if data.startswith("0x313ce567"):
+                    return "0x" + f"{18:064x}"           # decimals
+                if data.startswith("0x04e45aaf"):
+                    calls["n"] += 1
+                    return "0x" + f"{5:064x}"            # swap returns amountOut -> sellable
+            return "0x"
+
+        from rhl2_scanner.models import TokenSnapshot
+        snap = TokenSnapshot(chain="robinhood", pair_address="0xp", token_address="0x" + "a" * 40)
+        sim = HoneypotSimulator(cfg, session=FakeSession(handler))
+        report = await sim.check(snap)
+        self.assertFalse(report.is_honeypot)   # a V3 sell succeeded
+        self.assertGreaterEqual(calls["n"], 1)
+
+
 class TestLpLock(unittest.IsolatedAsyncioTestCase):
     def test_norm_lockers_merges_both_shapes(self):
         cfg = Config()

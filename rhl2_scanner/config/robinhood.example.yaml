@@ -32,7 +32,10 @@ chain:
   pool_scan_max_range: 5000
 
   # --- On-chain honeypot sell-sim (optional) ---
-  dex_router_address: ""           # TODO: Uniswap V2 router02 on Robinhood Chain
+  # RH launchers use Uniswap V3. TODO: paste the V3 SwapRouter02 address.
+  dex_router_address: ""           # Uniswap V3 SwapRouter02 on Robinhood Chain
+  dex_router_kind: "univ3"         # V3 exactInputSingle sell-sim
+  dex_v3_fee_tiers: [10000, 3000, 500]   # 1% / 0.3% / 0.05% pools to try
   honeypot_simulator_bytecode: ""  # optional: compiled contracts/HoneypotSimulator.sol
   honeypot_sim_amount_wei: 10000000000000000
 
