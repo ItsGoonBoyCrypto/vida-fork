@@ -1,9 +1,14 @@
 # RH L2 Early Memecoin Scanner
 
-Real-time scanner that surfaces early-stage memecoins on **Robinhood's EVM L2**
-(adaptable to Base and other EVM L2s) with a **safety-first, confluence-based**
-scoring model and Telegram alerting. Implements the v1.0 spec: aggressive rug
-gatekeepers first, then distribution / momentum / discovery scoring.
+Real-time scanner that surfaces early-stage memecoins on **Robinhood Chain
+(RH L2)** — chain id **4663**, mainnet live since 2026-07-01, DexScreener slug
+**`robinhood`** — with a **safety-first, confluence-based** scoring model and
+Telegram alerting. Implements the v1.0 spec: aggressive rug gatekeepers first,
+then distribution / momentum / discovery scoring.
+
+**Targets Robinhood Chain only.** The config ships with RH L2's real RPC
+(`rpc.mainnet.chain.robinhood.com`) and Blockscout explorer, so discovery +
+safety work out of the box. See `QUICKSTART.md` to deploy on a VPS.
 
 > ⚠️ **Informational only.** Memecoins are highly speculative and most fail even
 > with clean metrics. This tool emits *alerts*, not financial advice. DYOR,
@@ -28,7 +33,7 @@ plumbing is functional but must be pointed at RH L2's live endpoints.
 | Telegram notifier + `/status /tier /set /addwallet` commands | ✅ complete² |
 | **Paper-trading / live calibration mode** | ✅ records would-be entries, re-prices at 1h/6h/24h, win-rate by band |
 | Backtest / historical replay harness | ✅ harness done; supply your dataset |
-| Turnkey Base config + `.env` + Dockerfile | ✅ run the full pipeline live today |
+| Real Robinhood Chain config + `.env` + Dockerfile + systemd | ✅ VPS-ready |
 | EVM chain client (verify, authorities, LP-burn, holders) | ⚙️ works on standard EVM; **set RH L2 rpc/explorer** |
 | **RugCheck-style safety (GoPlus) integration** | ✅ real client + parser³ |
 | **Honeypot / tax on-chain simulation** | ✅ eth_call + stateOverride sell-sim (RPC-only)⁴ |
@@ -37,8 +42,8 @@ plumbing is functional but must be pointed at RH L2's live endpoints.
 | **LP lock detection + remaining duration** | ✅ locker balance + configurable unlock-time getter⁷ |
 | Dependency-free Keccak-256 (topics + storage slots) | ✅ verified against EVM vectors |
 
-¹ DexScreener must index RH L2 for its slug to return data. Until then set
-`chain.dexscreener_chain: "base"` to exercise the full pipeline against a live L2.
+¹ DexScreener indexes Robinhood Chain live under the slug `robinhood` (set as
+the default), so discovery works today with no extra setup.
 ² Requires `python-telegram-bot`; without it the notifier prints alerts to stdout.
 ³ GoPlus is the de-facto EVM analog to RugCheck (authorities, taxes, honeypot,
 LP lock/burn, holders, risk flags in one call). Set `chain.goplus_chain_id`. If
@@ -70,10 +75,11 @@ token. Unknown facts stay unknown — and the strict gate treats unknown as fail
 This is what lets the scanner run safely on a new L2 where no single provider has
 full coverage.
 
-**Robinhood Chain note:** RH's L2 (announced 2025, built on Arbitrum Orbit — EVM)
-may not yet have public DexScreener/RugCheck coverage or finalized chain id / RPC.
-Everything chain-specific is config-driven (`config/config.example.yaml`), so you
-drop in real values without code changes. Retargeting to Base = change two lines.
+**Robinhood Chain:** live mainnet (2026-07-01), Arbitrum-Orbit EVM L2, chain id
+4663, ETH gas, Blockscout explorer, Uniswap V2/V3/V4 from day one. The config
+(`config/robinhood.example.yaml`) ships these real values — no discovery of
+endpoints needed. Optional add-ons (WETH / factory / router addresses for the
+pool-listener + honeypot sell-sim) are grabbed from the explorer when wanted.
 
 ---
 
@@ -127,8 +133,8 @@ rhl2_scanner/
 
 ## Quick start
 
-**See `QUICKSTART.md` for the copy-paste path** (turnkey Base config so the full
-pipeline runs live today, plus exactly what secrets you need to supply).
+**See `QUICKSTART.md` for the copy-paste VPS deploy** (RH L2 config + secrets +
+systemd/Docker for 24/7).
 
 ```bash
 pip install -r rhl2_scanner/requirements.txt
@@ -136,8 +142,8 @@ pip install -r rhl2_scanner/requirements.txt
 # 1) smoke-test the scoring engine offline (no network, no config):
 python -m rhl2_scanner selfcheck
 
-# 2) turnkey live config on Base (fully indexed by DexScreener + GoPlus):
-cp rhl2_scanner/config/base.example.yaml rhl2_scanner/config/config.yaml
+# 2) Robinhood Chain config (ships with RH L2's real RPC/explorer/slug):
+cp rhl2_scanner/config/robinhood.example.yaml rhl2_scanner/config/config.yaml
 cp rhl2_scanner/.env.example rhl2_scanner/.env         # add secrets here (auto-loaded)
 
 # 3) one live discovery+score cycle, dry-run (prints would-be alerts):

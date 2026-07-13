@@ -1,125 +1,97 @@
-# Quick start — get the scanner running ASAP
+# Quick start — Robinhood L2 scanner, live on your VPS
 
-Two paths. Start with **A** to prove the whole pipeline live on real data today;
-switch to **B** the moment you have Robinhood L2's endpoints.
+This bot targets **Robinhood Chain (RH L2) only** — chain id **4663**, mainnet
+live since 2026-07-01, DexScreener slug **`robinhood`**. The config ships with
+RH L2's real RPC + explorer, so it works out of the box.
 
 ---
 
-## A. Live proving ground on Base (works right now)
+## Step 1 — Post the first message (30 seconds, no terminal)
 
-Base is a public EVM L2 fully indexed by DexScreener + GoPlus, so every
-subsystem — discovery, safety, honeypot sim, LP-lock, scoring, paper mode —
-runs live against it. Same code you'll point at RH L2 later.
+Open a **web browser**, paste this into the address bar, press Enter:
+
+```
+https://api.telegram.org/bot<YOUR_BOT_TOKEN>/sendMessage?chat_id=-1004299219898&text=RH%20L2%20Early%20Gem%20Scanner%20is%20ONLINE
+```
+
+You should see `{"ok":true,...}` and the message appears in your channel. If you
+get `"bot is not a member of the channel"`, add the bot to the channel as an
+**admin** first, then retry. (Prereq: the bot must already be an admin to post.)
+
+---
+
+## Step 2 — Put the scanner on your VPS (runs 24/7)
+
+SSH into your VPS, then:
 
 ```bash
-pip install -r rhl2_scanner/requirements.txt
+# 1) get the code
+git clone https://github.com/ItsGoonBoyCrypto/vida-fork /opt/rhl2-scanner
+cd /opt/rhl2-scanner
+git checkout claude/rh-l2-memecoin-scanner-7sj2qa
 
-cp rhl2_scanner/config/base.example.yaml rhl2_scanner/config/config.yaml
-cp rhl2_scanner/.env.example rhl2_scanner/.env        # optional: add a Basescan key
+# 2) install deps in a venv
+python3 -m venv .venv
+.venv/bin/pip install -r rhl2_scanner/requirements.txt
 
-# 1) Sanity check the scoring engine (offline):
-python -m rhl2_scanner selfcheck
+# 3) config = Robinhood Chain (already has RH L2 RPC/explorer/slug)
+cp rhl2_scanner/config/robinhood.example.yaml rhl2_scanner/config/config.yaml
 
-# 2) One live discovery+score cycle, dry-run (prints would-be alerts):
-python -m rhl2_scanner scan-once --config rhl2_scanner/config/config.yaml
+# 4) secrets (never committed)
+cp rhl2_scanner/.env.example rhl2_scanner/.env
+nano rhl2_scanner/.env      # set TELEGRAM_BOT_TOKEN and TELEGRAM_ALERT_CHAT_ID=-1004299219898
 
-# 3) Calibration mode — records would-be entries and re-prices them at 1h/6h/24h:
-python -m rhl2_scanner paper --config rhl2_scanner/config/config.yaml
-
-# 4) After it has run a while, see win-rate by score band:
-python -m rhl2_scanner paper-report --config rhl2_scanner/config/config.yaml
+# 5) confirm Telegram delivery
+.venv/bin/python -m rhl2_scanner tg-test --config rhl2_scanner/config/config.yaml
+#    expect:  Bot OK: @yourbot   and   send -> sent
 ```
 
-Leave `paper` running for a few days, then read `paper-report` to set your
-alert bands on evidence, not guesses.
-
 ---
 
-## B. Point it at Robinhood L2
-
-Edit the `chain:` block in `config/config.yaml` with RH L2's values, then run
-the same commands. Everything else is identical.
-
----
-
-## What I need from you (the only gaps)
-
-Nothing is required to run **A** in dry-run/paper. To go fully live you supply:
-
-| Item | Needed for | Where |
-|---|---|---|
-| **Telegram bot token + chat id** | sending alerts (not needed for paper/dry-run) | `.env`: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALERT_CHAT_ID` |
-| **Basescan (or RH L2 explorer) API key** | holder distribution, smart-money, bundle | `.env`: `RHL2_EXPLORER_API_KEY` |
-| **RH L2 chain values** | targeting RH L2 instead of Base | `config.yaml` `chain:` — chain_id, rpc_url, explorer_api_url, dexscreener_chain, weth_address, dex_factory_address, dex_router_address, goplus_chain_id (if covered) |
-| **Compiled simulator bytecode** *(optional)* | exact buy/sell tax % on-chain | `solc --optimize --bin-runtime rhl2_scanner/contracts/HoneypotSimulator.sol` → `.env` `RHL2_SIMULATOR_BYTECODE` |
-| **Curated smart-money wallets** *(optional)* | the smart-money signal | `config.yaml` `smart_money_wallets: [...]` or `/addwallet` in Telegram |
-| **Known LP locker addresses** *(optional)* | LP-lock + duration | `config.yaml` `chain.lp_locker_addresses` / `lp_lockers` |
-
-### How to get the Telegram bits
-1. DM **@BotFather** → `/newbot` → copy the token into `.env` (`TELEGRAM_BOT_TOKEN`).
-2. Add the bot to your alert channel/group as an **admin**, then post any message there.
-3. Discover the chat id and confirm delivery with the built-in helper:
-   ```bash
-   python -m rhl2_scanner tg-chats   --config rhl2_scanner/config/config.yaml   # lists chat ids
-   # put the -100... id in .env as TELEGRAM_ALERT_CHAT_ID, then:
-   python -m rhl2_scanner tg-test    --config rhl2_scanner/config/config.yaml   # sends a test alert
-   ```
-   `tg-test` prints `send -> sent` on success. No need for @RawDataBot or manual API calls.
-
----
-
-## Nightly calibration digest → your channel
-
-Once Telegram is wired, the scanner auto-posts a daily calibration summary
-(hit-rate / rug-rate / peak multiples by score band and alert level) so you can
-watch the thresholds prove themselves. Enabled in `base.example.yaml`:
-
-```yaml
-runtime:
-  paper_digest_enabled: true
-  paper_digest_hour_utc: 0        # posts once per day at/after 00:00 UTC
-  paper_digest_win_multiple: 2.0
-```
-
-It fires from inside the running `paper`/`run` loop — no cron needed. To post it
-on demand or from an external scheduler instead:
+## Step 3 — Run it 24/7 with auto-restart (systemd)
 
 ```bash
-python -m rhl2_scanner paper-digest --config rhl2_scanner/config/config.yaml
-# cron example (07:00 UTC daily):
-# 0 7 * * *  cd /path/to/repo && python -m rhl2_scanner paper-digest --config rhl2_scanner/config/config.yaml
+cp rhl2_scanner/deploy/rhl2-scanner.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now rhl2-scanner
+journalctl -u rhl2-scanner -f          # live logs
 ```
 
-Preview (posted as a Telegram message):
-
-```
-📊 RH L2 Scanner — Daily Calibration
-recorded 4 · settled 4 · win = peak ≥ 2x
-
-By score band
-• >=75 (strong): n=2 · hit 50% · rug 50% · med peak 4.2x · best 4.2x
-• 60-74 (watch): n=1 · hit 100% · rug 0% · med peak 2.5x
-By alert level
-• strong: n=2 · hit 50% · rug 50%
-```
-
-## Run it as a service (Docker)
+That runs **calibration mode** (`paper`): it scans Robinhood Chain, records
+would-be entries, re-prices them at 1h/6h/24h, and posts a nightly digest to
+your channel. Let it run a few days, then:
 
 ```bash
-docker build -t rhl2-scanner -f rhl2_scanner/Dockerfile .
-docker run --rm \
-  -v "$PWD/rhl2_scanner/config:/app/config" \
-  -v "$PWD/data:/app/data" \
-  --env-file rhl2_scanner/.env \
-  rhl2-scanner paper --config config/config.yaml
+.venv/bin/python -m rhl2_scanner paper-report --config rhl2_scanner/config/config.yaml
 ```
 
-The SQLite db (seen tokens, alerts, paper trades) persists in the mounted
-`data/` volume across restarts.
+When the score bands look good, switch to **live alerts**: edit
+`/etc/systemd/system/rhl2-scanner.service`, change `paper` to `run`, then
+`systemctl daemon-reload && systemctl restart rhl2-scanner`.
+
+Prefer Docker? Use `rhl2_scanner/deploy/docker-compose.yml` instead of systemd.
+
+---
+
+## What's already wired for RH L2 (nothing for you to find)
+- **Discovery:** DexScreener `robinhood` slug (live) — works immediately.
+- **Safety/holders/bundle:** Robinhood Chain Blockscout explorer + on-chain RPC.
+- **Chain:** id 4663, RPC `rpc.mainnet.chain.robinhood.com`.
+
+## Optional add-ons (fill from the explorer when you want them)
+| Field in `config.yaml` | Enables |
+|---|---|
+| `chain.weth_address` (Robinhood Wrapped ETH) | on-chain honeypot sell-sim + factory listener |
+| `chain.dex_factory_address` (Uniswap V2/V3 factory) | earliest new-pool detection |
+| `chain.dex_router_address` (Uniswap router) | honeypot sell-simulation |
+| compiled `HoneypotSimulator.sol` bytecode | exact buy/sell tax % |
+
+Grab these from **robinhoodchain.blockscout.com** (search "Wrapped Ether",
+"UniswapV2Factory", "Router") — or send me the addresses and I'll drop them in.
 
 ---
 
 ## Reminder
-Alerts are signals, not advice. Very early entries carry the highest rug risk
-even with clean metrics — size positions, take profits, and treat `paper-report`
-as the source of truth for whether the thresholds are actually working.
+Alerts are signals, not advice. Early entries carry the highest rug risk even
+with clean metrics — size positions, take profits, and treat `paper-report` as
+the source of truth for whether the thresholds work.

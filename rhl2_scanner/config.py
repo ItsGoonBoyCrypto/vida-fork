@@ -35,13 +35,15 @@ class ChainConfig:
     dexscreener_chain "base"); no code changes required.
     """
 
+    # Defaults are the REAL Robinhood Chain mainnet values (live since 2026-07-01,
+    # Arbitrum-Orbit EVM L2, chain id 4663). DexScreener indexes it as "robinhood".
     name: str = "robinhood-l2"
-    chain_id: int = 0                                  # TODO: set real RH L2 chain id
-    rpc_url: str = ""                                  # e.g. https://rpc.<rhl2>...
-    explorer_api_url: str = ""                         # Etherscan-style API base
-    explorer_api_key: str = ""
-    # DexScreener chain slug. RH L2 slug TBD; "base" works as an adaptable example.
-    dexscreener_chain: str = "robinhood"
+    chain_id: int = 4663
+    rpc_url: str = "https://rpc.mainnet.chain.robinhood.com"
+    # Robinhood Chain's explorer is Blockscout (Etherscan-compatible /api).
+    explorer_api_url: str = "https://robinhoodchain.blockscout.com/api"
+    explorer_api_key: str = ""                         # Blockscout works without a key
+    dexscreener_chain: str = "robinhood"               # confirmed live slug
     native_symbol: str = "ETH"
     weth_address: str = ""                             # wrapped-native for pair/router math
     # Addresses excluded from holder-distribution math (LP pools, burn, locker)

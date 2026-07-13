@@ -1,0 +1,31 @@
+# systemd unit — run the scanner 24/7 on a VPS with auto-restart.
+#
+# Install (as root):
+#   git clone <repo> /opt/rhl2-scanner && cd /opt/rhl2-scanner
+#   python3 -m venv .venv && .venv/bin/pip install -r rhl2_scanner/requirements.txt
+#   cp rhl2_scanner/config/robinhood.example.yaml rhl2_scanner/config/config.yaml
+#   cp rhl2_scanner/.env.example rhl2_scanner/.env    # add TELEGRAM_* etc.
+#   cp rhl2_scanner/deploy/rhl2-scanner.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now rhl2-scanner
+#   journalctl -u rhl2-scanner -f                     # watch logs
+#
+# Change `paper` to `run` below once tg-test passes and you want live alerts.
+
+[Unit]
+Description=RH L2 Early Memecoin Scanner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/rhl2-scanner
+EnvironmentFile=/opt/rhl2-scanner/rhl2_scanner/.env
+ExecStart=/opt/rhl2-scanner/.venv/bin/python -m rhl2_scanner paper --config rhl2_scanner/config/config.yaml
+Restart=always
+RestartSec=10
+# Hardening (optional but recommended)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

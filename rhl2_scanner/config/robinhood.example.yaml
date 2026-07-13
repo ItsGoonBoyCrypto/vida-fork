@@ -1,0 +1,79 @@
+# Robinhood Chain (RH L2) — REAL mainnet config. This is the target chain.
+# Mainnet live since 2026-07-01. Arbitrum-Orbit EVM L2, chain id 4663, ETH gas.
+# DexScreener indexes it as slug "robinhood"; explorer is Blockscout.
+#
+#   cp rhl2_scanner/config/robinhood.example.yaml rhl2_scanner/config/config.yaml
+#   python -m rhl2_scanner paper --config rhl2_scanner/config/config.yaml
+#
+# Discovery (DexScreener) + safety (on-chain + Blockscout) work out of the box.
+# The OPTIONAL fields marked TODO enable extra features (factory pool-listener,
+# on-chain honeypot sell-sim) — fill them from the explorer when you have them.
+
+chain:
+  name: robinhood-l2
+  chain_id: 4663
+  rpc_url: "https://rpc.mainnet.chain.robinhood.com"
+  # Blockscout Etherscan-compatible API (no key required; add one if you have it).
+  explorer_api_url: "https://robinhoodchain.blockscout.com/api"
+  explorer_api_key: ""
+  dexscreener_chain: "robinhood"
+  native_symbol: "ETH"
+  # TODO: Robinhood Wrapped ETH (WETH) address — grab from robinhoodchain.blockscout.com
+  # (search "Wrapped Ether") or a GeckoTerminal/DexScreener 4663/WETH pool page.
+  weth_address: ""
+  excluded_holder_addresses: []
+
+  # --- New-pool factory listener (optional; earliest discovery) ---
+  # Uniswap V2/V3/V4 are all live on Robinhood Chain. TODO: paste the Uniswap V2
+  # factory (PairCreated) OR V3 factory (PoolCreated) address from the explorer.
+  dex_factory_address: ""
+  dex_factory_kind: "univ2"        # "univ2" | "univ3"
+  pool_scan_block_lookback: 3000
+  pool_scan_max_range: 5000
+
+  # --- On-chain honeypot sell-sim (optional) ---
+  dex_router_address: ""           # TODO: Uniswap V2 router02 on Robinhood Chain
+  honeypot_simulator_bytecode: ""  # optional: compiled contracts/HoneypotSimulator.sol
+  honeypot_sim_amount_wei: 10000000000000000
+
+  # --- Third-party safety (RugCheck-equivalent) ---
+  # GoPlus may not cover chain 4663 yet — if uncovered it returns empty (safe:
+  # the on-chain checks + Blockscout carry safety). Harmless to leave set.
+  goplus_chain_id: "4663"
+  goplus_api_url: "https://api.gopluslabs.io/api/v1/token_security"
+  honeypot_api_url: ""
+
+  lp_locker_addresses: []
+  lp_lock_min_fraction: 0.5
+  lp_lockers: []
+
+weights:
+  safety: 0.38
+  distribution: 0.20
+  momentum: 0.25
+  discovery: 0.17
+
+active_tier: momentum
+
+runtime:
+  poll_interval_seconds: 20
+  request_timeout_seconds: 15
+  max_concurrent_enrichments: 6
+  db_path: "scanner.db"
+  dry_run: true                    # start dry; flip to false once tg-test passes
+  log_level: "INFO"
+  realert_cooldown_seconds: 21600
+  paper_mode: false                # `paper` command forces this on
+  paper_record_floor: 45
+  paper_checkpoint_hours: [1, 6, 24]
+  paper_settle_batch: 25
+  paper_digest_enabled: true
+  paper_digest_hour_utc: 0
+  paper_digest_win_multiple: 2.0
+
+telegram:
+  bot_token: ""                    # env TELEGRAM_BOT_TOKEN
+  alert_chat_id: ""                # env TELEGRAM_ALERT_CHAT_ID
+  admin_user_ids: []
+
+smart_money_wallets: []

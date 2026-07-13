@@ -1,0 +1,21 @@
+# Run the scanner 24/7 with Docker Compose (auto-restart).
+#
+#   cd <repo root>
+#   cp rhl2_scanner/config/robinhood.example.yaml rhl2_scanner/config/config.yaml
+#   cp rhl2_scanner/.env.example rhl2_scanner/.env      # add TELEGRAM_* etc.
+#   docker compose -f rhl2_scanner/deploy/docker-compose.yml up -d --build
+#   docker compose -f rhl2_scanner/deploy/docker-compose.yml logs -f
+#
+# Change the `command:` from paper to run once tg-test passes for live alerts.
+
+services:
+  scanner:
+    build:
+      context: ../..                       # repo root (Dockerfile copies rhl2_scanner/)
+      dockerfile: rhl2_scanner/Dockerfile
+    env_file: ../.env
+    volumes:
+      - ../config:/app/config              # your config.yaml
+      - ../../data:/app/data               # persisted scanner.db
+    command: ["paper", "--config", "config/config.yaml"]
+    restart: unless-stopped
