@@ -13,8 +13,11 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 # Package.
 COPY rhl2_scanner /app/rhl2_scanner
 
-# scanner.db persists here; mount a volume to keep it across restarts.
-VOLUME ["/app/data"]
+# scanner.db lives here. Ephemeral by default (resets on redeploy) — fine for
+# calibration. To persist across deploys, attach a Railway Volume (or Render
+# Disk, or `docker run -v`) mounted at /app/data. No Dockerfile VOLUME line:
+# Railway rejects it and uses its own Volumes feature instead.
+RUN mkdir -p /app/data
 ENV RHL2_DB_DIR=/app/data
 
 # Default: paper-mode calibration against the committed Robinhood Chain config
