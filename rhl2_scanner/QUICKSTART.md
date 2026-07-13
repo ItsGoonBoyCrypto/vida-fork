@@ -22,6 +22,21 @@ get `"bot is not a member of the channel"`, add the bot to the channel as an
 
 ## Step 2 — Put the scanner on your VPS (runs 24/7)
 
+### Fastest: one-line installer
+
+In your Hetzner console (or SSH session), paste this single command — it installs
+everything, writes your secrets, tests Telegram, and starts the 24/7 service:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ItsGoonBoyCrypto/vida-fork/claude/rh-l2-memecoin-scanner-7sj2qa/rhl2_scanner/deploy/bootstrap.sh | \
+  TELEGRAM_BOT_TOKEN='YOUR_BOT_TOKEN' TELEGRAM_ALERT_CHAT_ID='-1004299219898' bash
+```
+
+When it finishes you'll see `✅ Done`. Watch it with `journalctl -u rhl2-scanner -f`.
+To go live later: re-run the same line with `MODE=run` in front of `bash`.
+
+### Or do it manually
+
 SSH into your VPS, then:
 
 ```bash
