@@ -34,3 +34,9 @@ venv/
 
 # OS
 .DS_Store
+
+# RH L2 scanner runtime artifacts (never commit live config or the local db)
+rhl2_scanner/config/config.yaml
+scanner.db
+*.sqlite
+

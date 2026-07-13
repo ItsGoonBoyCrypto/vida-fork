@@ -1,0 +1,4 @@
+# RH L2 memecoin scanner dependencies (separate from the Vida wallet root reqs)
+aiohttp>=3.9
+PyYAML>=6.0
+python-telegram-bot>=20.0   # optional: only needed to actually send TG alerts
