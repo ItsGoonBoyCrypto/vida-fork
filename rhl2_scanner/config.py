@@ -294,6 +294,16 @@ class Config:
             self.chain.explorer_api_url = v
         if v := env.get("RHL2_SIMULATOR_BYTECODE"):
             self.chain.honeypot_simulator_bytecode = v
+        # DEX addresses — set as host Variables to enable honeypot sim + pool listener
+        # without editing the repo. Grab from robinhoodchain.blockscout.com.
+        if v := env.get("RHL2_WETH_ADDRESS"):
+            self.chain.weth_address = v
+        if v := env.get("RHL2_DEX_FACTORY"):
+            self.chain.dex_factory_address = v
+        if v := env.get("RHL2_DEX_ROUTER"):
+            self.chain.dex_router_address = v
+        if v := env.get("RHL2_DEX_FACTORY_KIND"):
+            self.chain.dex_factory_kind = v
         if v := env.get("TELEGRAM_BOT_TOKEN"):
             self.telegram.bot_token = v
         if v := env.get("TELEGRAM_ALERT_CHAT_ID"):
