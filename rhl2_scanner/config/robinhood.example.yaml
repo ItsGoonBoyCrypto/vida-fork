@@ -18,23 +18,21 @@ chain:
   explorer_api_key: ""
   dexscreener_chain: "robinhood"
   native_symbol: "ETH"
-  # TODO: Robinhood Wrapped ETH (WETH) address — grab from robinhoodchain.blockscout.com
-  # (search "Wrapped Ether") or a GeckoTerminal/DexScreener 4663/WETH pool page.
-  weth_address: ""
+  # Robinhood Wrapped ETH (WETH9) — verified across Uniswap subgraph + SDK + on-chain token0().
+  weth_address: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73"
   excluded_holder_addresses: []
 
-  # --- New-pool factory listener (optional; earliest discovery) ---
-  # RH memecoins launch mostly on Uniswap V3. TODO: paste the Uniswap V3 factory
-  # (emits PoolCreated) address from robinhoodchain.blockscout.com.
-  dex_factory_address: ""
-  dex_factory_kind: "univ3"        # RH launchers use V3; "univ2" also supported
+  # --- New-pool factory listener (earliest discovery) ---
+  # Uniswap V3 factory on Robinhood Chain (emits PoolCreated). RH launchers use V3.
+  dex_factory_address: "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA"
+  dex_factory_kind: "univ3"
   pool_scan_block_lookback: 3000
   pool_scan_max_range: 5000
 
-  # --- On-chain honeypot sell-sim (optional) ---
-  # RH launchers use Uniswap V3. TODO: paste the V3 SwapRouter02 address.
-  dex_router_address: ""           # Uniswap V3 SwapRouter02 on Robinhood Chain
-  dex_router_kind: "univ3"         # V3 exactInputSingle sell-sim
+  # --- On-chain honeypot sell-sim ---
+  # Uniswap V3 SwapRouter02 on Robinhood Chain (exactInputSingle sell-sim).
+  dex_router_address: "0xCaf681a66D020601342297493863E78C959E5cb2"
+  dex_router_kind: "univ3"
   dex_v3_fee_tiers: [10000, 3000, 500]   # 1% / 0.3% / 0.05% pools to try
   honeypot_simulator_bytecode: ""  # optional: compiled contracts/HoneypotSimulator.sol
   honeypot_sim_amount_wei: 10000000000000000
