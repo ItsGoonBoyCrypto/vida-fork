@@ -68,6 +68,10 @@ runtime:
   paper_record_floor: 45
   paper_checkpoint_hours: [1, 6, 24]
   paper_settle_batch: 25
+  # Nightly calibration digest auto-posted to the alert channel (needs TG set).
+  paper_digest_enabled: true
+  paper_digest_hour_utc: 0   # ~00:00 UTC
+  paper_digest_win_multiple: 2.0
 
 telegram:
   bot_token: ""              # env TELEGRAM_BOT_TOKEN

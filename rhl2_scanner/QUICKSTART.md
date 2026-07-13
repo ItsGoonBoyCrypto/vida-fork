@@ -68,6 +68,41 @@ Nothing is required to run **A** in dry-run/paper. To go fully live you supply:
 
 ---
 
+## Nightly calibration digest → your channel
+
+Once Telegram is wired, the scanner auto-posts a daily calibration summary
+(hit-rate / rug-rate / peak multiples by score band and alert level) so you can
+watch the thresholds prove themselves. Enabled in `base.example.yaml`:
+
+```yaml
+runtime:
+  paper_digest_enabled: true
+  paper_digest_hour_utc: 0        # posts once per day at/after 00:00 UTC
+  paper_digest_win_multiple: 2.0
+```
+
+It fires from inside the running `paper`/`run` loop — no cron needed. To post it
+on demand or from an external scheduler instead:
+
+```bash
+python -m rhl2_scanner paper-digest --config rhl2_scanner/config/config.yaml
+# cron example (07:00 UTC daily):
+# 0 7 * * *  cd /path/to/repo && python -m rhl2_scanner paper-digest --config rhl2_scanner/config/config.yaml
+```
+
+Preview (posted as a Telegram message):
+
+```
+📊 RH L2 Scanner — Daily Calibration
+recorded 4 · settled 4 · win = peak ≥ 2x
+
+By score band
+• >=75 (strong): n=2 · hit 50% · rug 50% · med peak 4.2x · best 4.2x
+• 60-74 (watch): n=1 · hit 100% · rug 0% · med peak 2.5x
+By alert level
+• strong: n=2 · hit 50% · rug 50%
+```
+
 ## Run it as a service (Docker)
 
 ```bash

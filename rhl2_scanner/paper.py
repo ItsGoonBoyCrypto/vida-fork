@@ -152,6 +152,59 @@ class PaperTrader:
         return report
 
 
+def format_digest_html(rep: dict, win_multiple: float = 2.0) -> str:
+    """Telegram-HTML calibration digest (compact, mobile-friendly)."""
+    from html import escape
+
+    lines = [
+        "📊 <b>RH L2 Scanner — Daily Calibration</b>",
+        f"recorded <b>{rep['total_recorded']}</b> · settled <b>{rep['settled']}</b> "
+        f"· win = peak ≥ {win_multiple:g}x",
+        "",
+        "<b>By score band</b>",
+    ]
+    for b in rep["bands"]:
+        if b.get("n"):
+            lines.append(
+                escape(
+                    f"• {b['band']}: n={b['n']} · hit {b['hit_rate']:.0%} · "
+                    f"rug {b['rug_rate']:.0%} · med peak {b['median_peak_mult']}x · "
+                    f"best {b['best_mult']}x"
+                )
+            )
+        else:
+            lines.append(escape(f"• {b['band']}: no samples yet"))
+
+    level_lines = []
+    for level, s in rep["by_level"].items():
+        if s.get("n"):
+            level_lines.append(
+                escape(f"• {level}: n={s['n']} · hit {s['hit_rate']:.0%} · rug {s['rug_rate']:.0%}")
+            )
+    if level_lines:
+        lines.append("")
+        lines.append("<b>By alert level</b>")
+        lines.extend(level_lines)
+
+    lines.append("")
+    lines.append("<i>Signals, not advice. Tune thresholds off the hit/rug split.</i>")
+    return "\n".join(lines)
+
+
+async def send_digest(cfg: Config, storage: Storage, session=None) -> tuple[bool, str]:
+    """Build the calibration digest and post it to Telegram (or stdout)."""
+    trader = PaperTrader(cfg, storage)
+    win = cfg.runtime.paper_digest_win_multiple
+    rep = trader.report(win_multiple=win)
+    token = cfg.telegram.bot_token
+    chat = cfg.telegram.alert_chat_id
+    if token and chat:
+        from .tgtools import send_message
+        return await send_message(token, chat, format_digest_html(rep, win), session)
+    print(format_report(rep), flush=True)
+    return False, "telegram not configured — printed digest to stdout"
+
+
 def format_report(rep: dict) -> str:
     lines = [
         "=== Paper-trading calibration ===",

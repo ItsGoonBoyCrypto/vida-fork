@@ -154,8 +154,8 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="rhl2_scanner")
     parser.add_argument(
         "command",
-        choices=["run", "scan-once", "paper", "paper-report", "backtest", "selfcheck",
-                 "tg-test", "tg-chats"],
+        choices=["run", "scan-once", "paper", "paper-report", "paper-digest",
+                 "backtest", "selfcheck", "tg-test", "tg-chats"],
     )
     parser.add_argument("dataset", nargs="?", help="JSONL file for backtest")
     parser.add_argument("--config", default="config/config.yaml")
@@ -183,6 +183,17 @@ def main(argv=None) -> int:
         try:
             trader = PaperTrader(cfg, storage)
             print(format_report(trader.report(win_multiple=args.win_multiple)))
+        finally:
+            storage.close()
+    elif args.command == "paper-digest":
+        # Post the calibration digest to Telegram once (for cron/systemd timers).
+        from .paper import send_digest
+        from .storage import Storage
+
+        storage = Storage(cfg.runtime.db_path)
+        try:
+            ok, detail = asyncio.run(send_digest(cfg, storage))
+            print(f"digest -> {detail}")
         finally:
             storage.close()
     elif args.command in ("tg-test", "tg-chats"):

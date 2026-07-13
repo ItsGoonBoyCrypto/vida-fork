@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Optional
 
 import aiohttp
@@ -49,6 +50,7 @@ class Scanner:
         # across cycles; bound to the shared session in run_forever/scan-once.
         self._listener: Optional[PoolListener] = None
         self.paper = PaperTrader(cfg, self.storage) if cfg.runtime.paper_mode else None
+        self._last_digest_day: Optional[tuple] = None
 
     # -- lifecycle -------------------------------------------------------
 
@@ -67,6 +69,7 @@ class Scanner:
                     await self.run_once()
                 except Exception:  # never let one cycle kill the loop
                     log.exception("scan cycle failed")
+                await self._maybe_send_digest()
                 await asyncio.wait(
                     [asyncio.create_task(self._stop.wait())],
                     timeout=self.cfg.runtime.poll_interval_seconds,
@@ -77,6 +80,25 @@ class Scanner:
 
     def stop(self) -> None:
         self._stop.set()
+
+    async def _maybe_send_digest(self) -> None:
+        """Post the nightly calibration digest once per day, at/after the hour."""
+        rc = self.cfg.runtime
+        if not rc.paper_digest_enabled:
+            return
+        tm = time.gmtime()
+        today = (tm.tm_year, tm.tm_yday)
+        if self._last_digest_day == today or tm.tm_hour < rc.paper_digest_hour_utc:
+            return
+        if not self.storage.all_paper_trades():
+            return  # nothing to report yet
+        try:
+            from .paper import send_digest
+            ok, detail = await send_digest(self.cfg, self.storage, self._session)
+            self._last_digest_day = today  # mark sent regardless, avoid retry storms
+            log.info("daily digest: %s", detail)
+        except Exception:
+            log.exception("digest send failed")
 
     # -- one cycle -------------------------------------------------------
 

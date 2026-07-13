@@ -6,7 +6,7 @@ import unittest
 
 from rhl2_scanner.config import Config
 from rhl2_scanner.models import AlertLevel, ScoreResult, TokenSnapshot
-from rhl2_scanner.paper import PaperTrader, format_report
+from rhl2_scanner.paper import PaperTrader, format_digest_html, format_report, send_digest
 from rhl2_scanner.storage import Storage
 
 
@@ -84,6 +84,28 @@ class TestPaper(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["max_mult"], 2.0)
         self.assertEqual(rows[0]["settled"], 0)
+
+    def test_digest_html_renders(self):
+        tid = self.trader.record(_snap("HGEM", 1.0), _result(82, AlertLevel.STRONG))
+        self.storage.update_paper_trade(tid, 3.0, {}, 3.0, 0.9, settled=True)
+        rep = self.trader.report(win_multiple=2.0)
+        html = format_digest_html(rep, 2.0)
+        self.assertIn("Daily Calibration", html)
+        self.assertIn("<b>", html)
+        self.assertIn("By score band", html)
+
+
+class TestDigestSend(unittest.IsolatedAsyncioTestCase):
+    async def test_send_digest_without_telegram_prints(self):
+        # No token/chat -> returns (False, ...) and prints instead of raising.
+        storage = Storage(":memory:")
+        try:
+            cfg = Config()
+            ok, detail = await send_digest(cfg, storage)
+            self.assertFalse(ok)
+            self.assertIn("stdout", detail)
+        finally:
+            storage.close()
 
 
 if __name__ == "__main__":
