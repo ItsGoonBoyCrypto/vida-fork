@@ -58,6 +58,24 @@ class ChainConfig:
 
     # --- Swap simulation (honeypot / tax) ---
     dex_router_address: str = ""                       # UniV2-style router for sell sim
+    # Optional buy+sell simulator contract for EXACT tax %. Supply the *runtime*
+    # bytecode (solc --bin-runtime) of contracts/HoneypotSimulator.sol; it is
+    # injected at honeypot_simulator_address via eth_call stateOverride `code`,
+    # so nothing is actually deployed on-chain. Empty => fall back to the
+    # boolean sell-simulation.
+    honeypot_simulator_bytecode: str = ""
+    honeypot_simulator_address: str = "0x00000000000000000000000000000000515a1000"
+    honeypot_sim_amount_wei: int = 10 ** 16            # 0.01 native token test buy
+
+    # --- LP lock detection ---
+    # Simple form: addresses that, if they hold the LP, count the LP as locked.
+    lp_locker_addresses: list[str] = field(default_factory=list)
+    # Rich form for reading remaining lock DURATION. Each entry:
+    #   {address, unlock_selector?, arg?}  where arg is "lp" (pass pair address)
+    #   or "none". unlock_selector is the 4-byte hex of a getter returning a
+    #   unix unlock timestamp (uint). See sources/lplock.py for known lockers.
+    lp_lockers: list = field(default_factory=list)
+    lp_lock_min_fraction: float = 0.5                  # LP fraction at a locker => "locked"
 
     # --- Third-party safety API (RugCheck-equivalent for EVM) ---
     # GoPlus Security token-security API is the de-facto EVM analog to RugCheck.
@@ -66,9 +84,6 @@ class ChainConfig:
     goplus_api_url: str = "https://api.gopluslabs.io/api/v1/token_security"
     # honeypot.is-compatible endpoint (optional cross-check / RH L2 fallback).
     honeypot_api_url: str = ""
-
-    # Known LP locker contracts on this chain (LP held here counts as "locked").
-    lp_locker_addresses: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

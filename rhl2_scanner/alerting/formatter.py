@@ -63,7 +63,10 @@ def _safety_line(snap: TokenSnapshot) -> str:
     if s.lp_burned:
         parts.append("✅ LP Burned")
     elif s.lp_locked:
-        parts.append("✅ LP Locked")
+        if s.lp_lock_seconds:
+            parts.append(f"✅ LP Locked {s.lp_lock_seconds // 86400}d")
+        else:
+            parts.append("✅ LP Locked")
     if s.bundle_supply_pct is not None:
         parts.append("Low Bundle" if s.bundle_supply_pct < 20 else f"⚠️ Bundle {s.bundle_supply_pct:.0f}%")
     if not parts:

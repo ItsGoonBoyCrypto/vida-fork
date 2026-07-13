@@ -24,13 +24,25 @@ chain:
 
   # --- Swap simulation (honeypot / tax) ---
   dex_router_address: ""          # UniV2-style router for the sell simulation
+  # Exact-tax path: runtime bytecode of contracts/HoneypotSimulator.sol.
+  #   solc --optimize --bin-runtime --evm-version paris HoneypotSimulator.sol
+  # Injected via eth_call stateOverride (never deployed). Empty => boolean sell-sim only.
+  honeypot_simulator_bytecode: ""
+  honeypot_simulator_address: "0x00000000000000000000000000000000515a1000"
+  honeypot_sim_amount_wei: 10000000000000000   # 0.01 native token test buy
 
   # --- Third-party safety (RugCheck-equivalent for EVM) ---
   goplus_chain_id: ""             # GoPlus decimal chain id as string, e.g. "8453" (Base). Empty = skip.
   goplus_api_url: "https://api.gopluslabs.io/api/v1/token_security"
   honeypot_api_url: ""            # optional honeypot.is-compatible endpoint (cross-check / RH L2 fallback)
 
-  lp_locker_addresses: []         # LP held at these addresses counts as "locked"
+  # --- LP lock detection ---
+  lp_locker_addresses: []         # LP held at these addresses counts as "locked" (no duration)
+  lp_lock_min_fraction: 0.5       # LP fraction at a locker to count as locked
+  lp_lockers: []                  # rich form for reading remaining lock DURATION, e.g.:
+  #  - address: "0xUNCXLockerAddress"
+  #    unlock_selector: "0x..."    # 4-byte getter returning a unix unlock timestamp
+  #    arg: "lp"                   # pass the pair (LP token) address, or "none"
 
 weights:            # composite category weights (auto-normalized)
   safety: 0.38

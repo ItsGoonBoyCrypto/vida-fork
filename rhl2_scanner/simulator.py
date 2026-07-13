@@ -30,7 +30,7 @@ from typing import Any, Optional
 import aiohttp
 
 from .config import Config
-from .keccak import mapping_slot, nested_mapping_slot
+from .keccak import keccak256, mapping_slot, nested_mapping_slot
 from .models import SafetyReport, TokenSnapshot
 
 log = logging.getLogger("rhl2.simulator")
@@ -77,18 +77,70 @@ class HoneypotSimulator:
     # -- public ----------------------------------------------------------
 
     async def check(self, snap: TokenSnapshot) -> SafetyReport:
-        """Return a partial SafetyReport with honeypot/tax facts only."""
+        """Return a partial SafetyReport with honeypot/tax facts only.
+
+        Strategy precedence (first that yields a honeypot verdict wins):
+          1. deployed simulator contract (exact buy+sell tax, via stateOverride),
+          2. external honeypot.is-style API (exact taxes),
+          3. on-chain sell-simulation boolean (RPC-only, sellability).
+        """
         report = SafetyReport()
 
-        # Prefer an external honeypot API when configured (gives exact taxes).
+        # 1) Buy+sell simulator contract -> exact tax %.
+        if self.cfg.chain.honeypot_simulator_bytecode:
+            await self._check_contract_sim(snap, report)
+            if report.is_honeypot is not None:
+                return report
+
+        # 2) External honeypot API.
         if self.cfg.chain.honeypot_api_url:
             await self._check_api(snap, report)
             if report.is_honeypot is not None:
                 return report
 
-        # On-chain sell simulation (works without any third party).
+        # 3) On-chain sell simulation (works without any third party).
         await self._check_onchain(snap, report)
         return report
+
+    # -- deployed simulator contract (exact taxes) -----------------------
+
+    async def _check_contract_sim(self, snap: TokenSnapshot, report: SafetyReport) -> None:
+        chain = self.cfg.chain
+        if not (chain.rpc_url and chain.dex_router_address and chain.weth_address):
+            return
+        code = chain.honeypot_simulator_bytecode
+        code = code if code.startswith("0x") else "0x" + code
+        sim_addr = chain.honeypot_simulator_address
+        amount = int(chain.honeypot_sim_amount_wei)
+
+        selector = keccak256(b"simulate(address,address,address,uint256)")[:4].hex()
+        data = (
+            "0x" + selector
+            + _addr(snap.token_address)
+            + _addr(chain.dex_router_address)
+            + _addr(chain.weth_address)
+            + _w(amount)
+        )
+        overrides = {
+            sim_addr.lower(): {"code": code},
+            BURNER: {"balance": "0x" + _w(amount * 4)},   # fund the caller to send `value`
+        }
+        status, result = await self._call_status_raw(
+            sim_addr, data, overrides, frm=BURNER, value=amount
+        )
+        if status == "revert":
+            # A revert inside the simulator's sell path = not sellable.
+            report.is_honeypot = True
+            return
+        if status != "ok" or not result:
+            return   # couldn't determine -> leave None
+        words = _decode_words(result, 5)
+        if words is None:
+            return
+        buy_bps, sell_bps, bought, sold_eth, ok = words
+        report.buy_tax_pct = round(buy_bps / 100.0, 2)
+        report.sell_tax_pct = round(sell_bps / 100.0, 2)
+        report.is_honeypot = not (bool(ok) and bought > 0 and sold_eth > 0)
 
     # -- external API strategy -------------------------------------------
 
@@ -218,13 +270,15 @@ class HoneypotSimulator:
     async def _call_status(self, to: str, data: str, overrides: Optional[dict], frm: Optional[str]):
         return await self._call_status_raw(to, data, overrides, frm)
 
-    async def _call_status_raw(self, to, data, overrides, frm):
+    async def _call_status_raw(self, to, data, overrides, frm, value=None):
         """Return ('ok', result) | ('revert', msg) | ('error', None)."""
         if not self.cfg.chain.rpc_url or self._session is None:
             return "error", None
         tx: dict[str, Any] = {"to": to, "data": data}
         if frm:
             tx["from"] = frm
+        if value is not None:
+            tx["value"] = hex(value)
         params: list = [tx, "latest"]
         if overrides:
             params.append(overrides)
@@ -243,6 +297,17 @@ class HoneypotSimulator:
         if "revert" in err.lower() or "execution reverted" in err.lower() or "insufficient" in err.lower():
             return "revert", err
         return "error", None
+
+
+def _decode_words(result: str, n: int) -> Optional[tuple[int, ...]]:
+    """Decode the first ``n`` 32-byte words of an ABI-encoded return blob."""
+    h = result[2:] if result.startswith("0x") else result
+    if len(h) < n * 64:
+        return None
+    try:
+        return tuple(int(h[i * 64:(i + 1) * 64], 16) for i in range(n))
+    except ValueError:
+        return None
 
 
 def _hex_to_int(x: Optional[str]) -> Optional[int]:

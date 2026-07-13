@@ -30,7 +30,9 @@ plumbing is functional but must be pointed at RH L2's live endpoints.
 | EVM chain client (verify, authorities, LP-burn, holders) | ⚙️ works on standard EVM; **set RH L2 rpc/explorer** |
 | **RugCheck-style safety (GoPlus) integration** | ✅ real client + parser³ |
 | **Honeypot / tax on-chain simulation** | ✅ eth_call + stateOverride sell-sim (RPC-only)⁴ |
+| **Exact buy/sell tax (simulator contract)** | ✅ stateOverride-injected buy+sell sim⁶ |
 | **New-pool factory listener (earliest detection)** | ✅ real eth_getLogs polling (UniV2 + V3)⁵ |
+| **LP lock detection + remaining duration** | ✅ locker balance + configurable unlock-time getter⁷ |
 | Dependency-free Keccak-256 (topics + storage slots) | ✅ verified against EVM vectors |
 
 ¹ DexScreener must index RH L2 for its slug to return data. Until then set
@@ -47,6 +49,14 @@ from GoPlus / a honeypot.is-style API (`honeypot_api_url`).
 ⁵ Polls the DEX factory's `PairCreated`/`PoolCreated` logs so tokens are caught
 the moment liquidity is added, before DexScreener indexes them. Set
 `dex_factory_address` + `dex_factory_kind`.
+⁶ `contracts/HoneypotSimulator.sol` buys then sells in a single `eth_call` and
+compares actual amounts to tax-free reserve quotes — the only way to get true
+token transfer taxes. Its *runtime* bytecode is injected via `stateOverride`
+(never deployed on-chain). Compile with `solc --bin-runtime` and set
+`honeypot_simulator_bytecode`. Returns exact buy/sell tax in bps + sellability.
+⁷ Detects LP locked when ≥ `lp_lock_min_fraction` of LP supply sits in a known
+locker (works for any locker — they all custody the LP). Remaining duration is
+read from a per-locker unlock-time getter configured in `lp_lockers`.
 
 ### How the three safety signals combine
 
@@ -89,7 +99,8 @@ rhl2_scanner/
   scoring.py         weighted composite engine (spec §3)
   bundle.py          same-block + common-funder cluster detection (pure fn + client)
   keccak.py          dependency-free Keccak-256 + EVM slot/topic helpers
-  simulator.py       honeypot/tax on-chain sell-simulation (eth_call + stateOverride)
+  simulator.py       honeypot/tax simulation (sell-sim boolean + exact-tax contract path)
+  contracts/HoneypotSimulator.sol   buy+sell simulator (runtime bytecode via stateOverride)
   storage.py         SQLite: seen tokens, alert history, re-alert cooldown
   scanner.py         async orchestration loop
   backtest.py        historical replay -> alert precision
@@ -100,6 +111,7 @@ rhl2_scanner/
     goplus.py        GoPlus token-security client (RugCheck-equivalent)
     safety.py        CompositeSafetySource — merges GoPlus + on-chain + simulator
     poollistener.py  new-pool factory log listener (earliest discovery)
+    lplock.py        LP-lock detection + remaining-duration reader
     smartmoney.py    curated wallet matcher
   alerting/
     formatter.py     spec §4 alert rendering
@@ -180,18 +192,23 @@ Alert bands (momentum tier): **≥75 = Strong**, **60–74 = Watch**, **<60 / sa
 3. `chain.excluded_holder_addresses` / `chain.lp_locker_addresses` — LP pools,
    lockers, treasury.
 4. **Honeypot/tax:** set `chain.dex_router_address` + `chain.weth_address` for the
-   on-chain sell-simulation. Optionally set `chain.honeypot_api_url` for exact tax %.
+   on-chain sell-simulation. For **exact tax %**, compile `contracts/HoneypotSimulator.sol`
+   (`solc --bin-runtime`) into `chain.honeypot_simulator_bytecode`, or set
+   `chain.honeypot_api_url`.
 5. **RugCheck-style:** set `chain.goplus_chain_id` if GoPlus covers RH L2 (decimal
    chain id as string); otherwise the on-chain sources carry safety on their own.
 6. **New-pool listener:** set `chain.dex_factory_address` + `chain.dex_factory_kind`
    (`univ2`/`univ3`) for sub-DexScreener-latency discovery.
-7. Populate `smart_money_wallets` with your curated high-win-rate list.
-8. Archive live snapshots to JSONL and use `backtest` to tune thresholds by win rate.
+7. **LP lock:** list locker addresses in `chain.lp_locker_addresses` (locked
+   detection), or `chain.lp_lockers` with each locker's `unlock_selector` for
+   remaining-duration readout.
+8. Populate `smart_money_wallets` with your curated high-win-rate list.
+9. Archive live snapshots to JSONL and use `backtest` to tune thresholds by win rate.
 
-### Still needs a live endpoint / operator input
-- **Exact buy/sell tax magnitude on-chain** — the sell-sim gives a reliable
-  *sellable / honeypot* boolean; precise tax needs `honeypot_api_url` or a deployed
-  buy+sell simulator contract. GoPlus supplies tax % where it has coverage.
-- **LP-lock *duration*** — burn is detected on-chain; remaining lock time needs the
-  specific locker contract's ABI (add under `lp_locker_addresses` + a reader).
+### Operator inputs (chain-specific, no code changes)
+- **Simulator bytecode** — compile `contracts/HoneypotSimulator.sol` and paste the
+  runtime bytecode into config. The contract + eth_call wiring are done; only the
+  compile step is yours (keeps the repo free of a pinned solc toolchain).
+- **Locker unlock selectors** — lockers differ; supply each locker's unlock-time
+  getter selector in `lp_lockers`. Locked-detection works with just the address.
 ```

@@ -21,12 +21,15 @@ than silently passing.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 import aiohttp
 
 from ..config import Config
 from ..models import SafetyReport, TokenSnapshot
+
+log = logging.getLogger("rhl2.chain")
 
 # Well-known burn sinks used across EVM chains.
 BURN_ADDRESSES = {
@@ -124,16 +127,27 @@ class EvmChainClient:
 
         # LP safety: is the LP token burned (dead balance ~= supply)?
         report.lp_burned = await self._lp_burned(snap.pair_address)
-        # LP lock detection requires knowing the locker contract(s) on RH L2.
-        # TODO: set locker addresses in config and check LP balance held there.
 
-        # Taxes / honeypot require a buy/sell simulation. Point HONEYPOT_SIM at
-        # a honeypot.is-style service for RH L2, or implement an eth_call-based
-        # sandwich simulation against the router. Left as an explicit hook so
-        # facts stay None (=> unconfirmed => gated) until wired.
+        # LP lock + remaining duration via known locker contracts (config).
+        if not report.lp_burned:
+            locked, remaining = await self._read_lp_lock(snap.pair_address)
+            report.lp_locked = locked
+            report.lp_lock_seconds = remaining
+
+        # Honeypot/tax facts are produced by simulator.HoneypotSimulator and
+        # merged by CompositeSafetySource, keeping the concerns decoupled.
         await self._simulate_taxes(snap, report)
 
         return report
+
+    async def _read_lp_lock(self, pair: str) -> tuple[Optional[bool], Optional[int]]:
+        from .lplock import LpLockReader
+        reader = LpLockReader(self.cfg, session=self._session)
+        try:
+            return await reader.read(pair)
+        except Exception as exc:  # never let locker quirks break assessment
+            log.debug("lp-lock read failed: %s", exc)
+            return None, None
 
     async def _read_owner(self, token: str) -> Optional[str]:
         for sel in (_SEL_OWNER, _SEL_GET_OWNER):
