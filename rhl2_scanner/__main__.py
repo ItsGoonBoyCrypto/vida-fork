@@ -64,6 +64,47 @@ async def _scan_once(cfg: Config) -> None:
         scanner.storage.close()
 
 
+async def _tg(cfg: Config, command: str) -> None:
+    """Verify Telegram wiring: send a test alert and/or discover chat ids."""
+    from .tgtools import discover_chats, get_bot_username, send_message
+
+    token = cfg.telegram.bot_token
+    if not token:
+        print("No TELEGRAM_BOT_TOKEN set (put it in .env or config).", file=sys.stderr)
+        return
+
+    username = await get_bot_username(token)
+    if username:
+        print(f"Bot OK: @{username}")
+    else:
+        print("Could not reach Telegram (token wrong, or network/egress blocked).")
+
+    chat_id = cfg.telegram.alert_chat_id
+    if command == "tg-test" and chat_id:
+        ok, detail = await send_message(
+            token, chat_id,
+            "✅ <b>RH L2 scanner</b> — Telegram wiring confirmed. Alerts will arrive here.",
+        )
+        print(f"send -> {detail}")
+        if ok:
+            return
+
+    # Help the user find the chat id (invite links can't be resolved directly).
+    chats = await discover_chats(token)
+    if chats:
+        print("\nDiscovered chats (set one as TELEGRAM_ALERT_CHAT_ID):")
+        for c in chats:
+            print(f"  {c['id']}   {c.get('title') or ''} [{c.get('type')}]")
+    else:
+        print(
+            "\nNo chats found in getUpdates. To register the channel:\n"
+            "  1) Add the bot to the channel as an ADMIN.\n"
+            "  2) Post any message in the channel.\n"
+            "  3) Re-run: python -m rhl2_scanner tg-chats\n"
+            "The channel id (looks like -100xxxxxxxxxx) will then appear above."
+        )
+
+
 def _selfcheck(cfg: Config) -> None:
     """Score a synthetic 'clean' token with no network — smoke test the engine."""
     from .models import SafetyReport, TokenSnapshot
@@ -113,7 +154,8 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="rhl2_scanner")
     parser.add_argument(
         "command",
-        choices=["run", "scan-once", "paper", "paper-report", "backtest", "selfcheck"],
+        choices=["run", "scan-once", "paper", "paper-report", "backtest", "selfcheck",
+                 "tg-test", "tg-chats"],
     )
     parser.add_argument("dataset", nargs="?", help="JSONL file for backtest")
     parser.add_argument("--config", default="config/config.yaml")
@@ -143,6 +185,8 @@ def main(argv=None) -> int:
             print(format_report(trader.report(win_multiple=args.win_multiple)))
         finally:
             storage.close()
+    elif args.command in ("tg-test", "tg-chats"):
+        asyncio.run(_tg(cfg, args.command))
     elif args.command == "selfcheck":
         _selfcheck(cfg)
     elif args.command == "backtest":

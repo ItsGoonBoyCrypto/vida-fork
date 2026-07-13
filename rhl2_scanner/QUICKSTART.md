@@ -56,9 +56,15 @@ Nothing is required to run **A** in dry-run/paper. To go fully live you supply:
 | **Known LP locker addresses** *(optional)* | LP-lock + duration | `config.yaml` `chain.lp_locker_addresses` / `lp_lockers` |
 
 ### How to get the Telegram bits
-1. DM **@BotFather** → `/newbot` → copy the token.
-2. Add the bot to your alert channel/group as an admin.
-3. Get the chat id (e.g. message **@RawDataBot**, or use the API `getUpdates`).
+1. DM **@BotFather** → `/newbot` → copy the token into `.env` (`TELEGRAM_BOT_TOKEN`).
+2. Add the bot to your alert channel/group as an **admin**, then post any message there.
+3. Discover the chat id and confirm delivery with the built-in helper:
+   ```bash
+   python -m rhl2_scanner tg-chats   --config rhl2_scanner/config/config.yaml   # lists chat ids
+   # put the -100... id in .env as TELEGRAM_ALERT_CHAT_ID, then:
+   python -m rhl2_scanner tg-test    --config rhl2_scanner/config/config.yaml   # sends a test alert
+   ```
+   `tg-test` prints `send -> sent` on success. No need for @RawDataBot or manual API calls.
 
 ---
 
