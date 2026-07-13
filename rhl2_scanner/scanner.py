@@ -162,8 +162,13 @@ class Scanner:
 
         # Paper mode records would-be entries (incl. below the alert band) for
         # calibration; it does not gate on cooldown so every candidate is logged.
+        # Record on the LENIENT safety pass so that tokens whose safety is merely
+        # *unconfirmed* (common on a new chain without 3rd-party coverage) still
+        # generate calibration data — confirmed-bad (honeypot/high-tax) is still
+        # excluded. Live alerts (below) keep using the strict, tier-driven result.
         if self.paper is not None:
-            self.paper.record(snap, result)
+            paper_result = result if not strict else score_token(snap, self.cfg, strict_safety=False)
+            self.paper.record(snap, paper_result)
 
         if result.level in (AlertLevel.STRONG, AlertLevel.WATCH):
             if self.storage.in_cooldown(snap.pair_address, self.cfg.runtime.realert_cooldown_seconds):
