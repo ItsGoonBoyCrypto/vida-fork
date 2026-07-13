@@ -68,8 +68,9 @@ runtime:
   paper_checkpoint_hours: [1, 6, 24]
   paper_settle_batch: 25
   paper_digest_enabled: true
-  paper_digest_hour_utc: 0
+  paper_digest_interval_hours: 1      # hourly while ramping up; raise to 24 later
   paper_digest_win_multiple: 2.0
+  send_startup_message: true          # posts a "scanner online" msg on each boot
 
 telegram:
   bot_token: ""                    # env TELEGRAM_BOT_TOKEN

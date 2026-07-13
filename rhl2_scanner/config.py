@@ -223,10 +223,12 @@ class RuntimeConfig:
     # Hours after entry to snapshot realized price. Last value = when settled.
     paper_checkpoint_hours: list = field(default_factory=lambda: [1, 6, 24])
     paper_settle_batch: int = 25               # max open trades to re-price per cycle
-    # Nightly calibration digest auto-posted to the alert channel.
+    # Calibration digest auto-posted to the alert channel.
     paper_digest_enabled: bool = False
-    paper_digest_hour_utc: int = 0             # send once per day at/after this UTC hour
+    paper_digest_interval_hours: float = 24.0  # how often to post (e.g. 1 = hourly)
     paper_digest_win_multiple: float = 2.0
+    # Post a "scanner online" message on startup (also serves as a wiring test).
+    send_startup_message: bool = True
 
 
 @dataclass

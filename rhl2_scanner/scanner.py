@@ -50,7 +50,7 @@ class Scanner:
         # across cycles; bound to the shared session in run_forever/scan-once.
         self._listener: Optional[PoolListener] = None
         self.paper = PaperTrader(cfg, self.storage) if cfg.runtime.paper_mode else None
-        self._last_digest_day: Optional[tuple] = None
+        self._last_digest_ts: Optional[float] = None
 
     # -- lifecycle -------------------------------------------------------
 
@@ -63,6 +63,7 @@ class Scanner:
             self.cfg.active_tier.value,
             self.cfg.runtime.dry_run,
         )
+        await self._send_startup_message()
         try:
             while not self._stop.is_set():
                 try:
@@ -81,22 +82,40 @@ class Scanner:
     def stop(self) -> None:
         self._stop.set()
 
+    async def _send_startup_message(self) -> None:
+        """Post a 'scanner online' message on boot (also a Telegram wiring test)."""
+        rc, tg = self.cfg.runtime, self.cfg.telegram
+        if not (rc.send_startup_message and tg.bot_token and tg.alert_chat_id):
+            return
+        mode = "calibration (paper)" if rc.dry_run else "LIVE alerts"
+        text = (
+            "🟢 <b>RH L2 Scanner online</b>\n"
+            f"Chain: robinhood (4663) · tier: {self.cfg.active_tier.value} · mode: {mode}\n"
+            "Watching for early gems…"
+        )
+        try:
+            from .tgtools import send_message
+            ok, detail = await send_message(tg.bot_token, tg.alert_chat_id, text, self._session)
+            log.info("startup message: %s", detail)
+        except Exception:
+            log.exception("startup message failed")
+
     async def _maybe_send_digest(self) -> None:
-        """Post the nightly calibration digest once per day, at/after the hour."""
+        """Post the calibration digest every paper_digest_interval_hours."""
         rc = self.cfg.runtime
         if not rc.paper_digest_enabled:
             return
-        tm = time.gmtime()
-        today = (tm.tm_year, tm.tm_yday)
-        if self._last_digest_day == today or tm.tm_hour < rc.paper_digest_hour_utc:
+        now = time.time()
+        interval = max(0.1, rc.paper_digest_interval_hours) * 3600.0
+        if self._last_digest_ts is not None and (now - self._last_digest_ts) < interval:
             return
         if not self.storage.all_paper_trades():
-            return  # nothing to report yet
+            return  # nothing to report yet — don't start the clock until there's data
         try:
             from .paper import send_digest
             ok, detail = await send_digest(self.cfg, self.storage, self._session)
-            self._last_digest_day = today  # mark sent regardless, avoid retry storms
-            log.info("daily digest: %s", detail)
+            self._last_digest_ts = now  # mark sent regardless, avoid retry storms
+            log.info("digest: %s", detail)
         except Exception:
             log.exception("digest send failed")
 
