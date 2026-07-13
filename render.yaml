@@ -1,0 +1,17 @@
+# Render Blueprint — deploy the RH L2 scanner as an always-on background worker
+# with no terminal. In Render: New → Blueprint → connect this repo → it reads
+# this file and prompts for the two Telegram values, then runs 24/7.
+services:
+  - type: worker
+    name: rhl2-scanner
+    runtime: docker
+    dockerfilePath: ./rhl2_scanner/Dockerfile
+    dockerContext: .
+    branch: claude/rh-l2-memecoin-scanner-7sj2qa
+    plan: starter
+    autoDeploy: true
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false        # you paste this in the Render dashboard (kept secret)
+      - key: TELEGRAM_ALERT_CHAT_ID
+        sync: false

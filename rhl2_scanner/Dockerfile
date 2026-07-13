@@ -17,6 +17,8 @@ COPY rhl2_scanner /app/rhl2_scanner
 VOLUME ["/app/data"]
 ENV RHL2_DB_DIR=/app/data
 
-# Default: paper-mode calibration against config/config.yaml.
+# Default: paper-mode calibration against the committed Robinhood Chain config
+# (chain defaults + digest are baked in; secrets come from env vars). Works with
+# zero config editing on managed hosts (Railway/Render) — just set TELEGRAM_*.
 ENTRYPOINT ["python", "-m", "rhl2_scanner"]
-CMD ["paper", "--config", "config/config.yaml"]
+CMD ["paper", "--config", "rhl2_scanner/config/robinhood.example.yaml"]
