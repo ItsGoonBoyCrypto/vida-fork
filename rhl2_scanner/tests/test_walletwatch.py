@@ -77,6 +77,9 @@ def _sell_tx(h="0xhash2"):
 class TestWalletWatch(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.storage = Storage(":memory:")
+        # Pre-seed the wallet so tests exercise steady-state (first poll alerts).
+        # The dedicated seeding test below uses a fresh, unseeded storage.
+        self.storage.mark_wallet_event(f"__seeded__|{WHALE}")
 
     def tearDown(self):
         self.storage.close()
@@ -95,6 +98,21 @@ class TestWalletWatch(unittest.IsolatedAsyncioTestCase):
         w = WalletWatcher(cfg, self.storage, session=FakeSession([_buy_tx()], price=0.5))
         self.assertEqual(len(await w.poll()), 1)
         self.assertEqual(len(await w.poll()), 0)   # already seen
+
+    async def test_first_poll_seeds_silently(self):
+        # Fresh (unseeded) storage: first poll seeds history silently, no spam.
+        fresh = Storage(":memory:")
+        try:
+            cfg = _cfg()
+            w = WalletWatcher(cfg, fresh, session=FakeSession([_buy_tx("0xold")], price=0.5))
+            self.assertEqual(len(await w.poll()), 0)     # silent seed
+            # A NEW buy afterwards DOES alert.
+            w2 = WalletWatcher(cfg, fresh, session=FakeSession([_buy_tx("0xnew")], price=0.5))
+            events = await w2.poll()
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0].tx_hash, "0xnew")
+        finally:
+            fresh.close()
 
     async def test_sells_ignored_by_default(self):
         cfg = _cfg(alert_on="buys")

@@ -78,6 +78,11 @@ class WalletWatcher:
         want_sells = self.ww.alert_on == "buys_sells"
 
         for wallet in self.ww.wallets:
+            # First time we ever poll a wallet: seed its recent history as "seen"
+            # WITHOUT alerting, so we only alert on genuinely new activity after.
+            seed_key = f"__seeded__|{wallet}"
+            seeding = self.storage.wallet_event_is_new(seed_key)
+
             for tx in await self._transfers(wallet):
                 event = self._classify(wallet, tx, want_sells)
                 if event is None:
@@ -85,11 +90,16 @@ class WalletWatcher:
                 tx_key = f"{wallet}|{event.tx_hash}|{event.token_address}"
                 if not self.storage.wallet_event_is_new(tx_key):
                     continue
+                self.storage.mark_wallet_event(tx_key)  # mark seen regardless of size/seed
+                if seeding:
+                    continue                             # silent on the first poll
                 await self._enrich(event, dex)
-                self.storage.mark_wallet_event(tx_key)  # mark seen regardless of size
                 if event.usd is not None and event.usd < self.ww.min_usd:
                     continue
                 events.append(event)
+
+            if seeding:
+                self.storage.mark_wallet_event(seed_key)
         return events
 
     def _classify(self, wallet: str, tx: dict, want_sells: bool) -> Optional[WhaleEvent]:
