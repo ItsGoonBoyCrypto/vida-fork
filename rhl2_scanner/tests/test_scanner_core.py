@@ -142,6 +142,37 @@ class TestQuickStartGate(unittest.TestCase):
     def test_clean_passes(self):
         self.assertTrue(quick_start_gate(clean_token(), self.th).passed)
 
+    def test_min_market_cap_floor_gates(self):
+        from rhl2_scanner.config import Thresholds
+        th = Thresholds(min_market_cap_usd=40_000)
+        self.assertFalse(quick_start_gate(clean_token(market_cap_usd=20_000), th).passed)
+        self.assertTrue(quick_start_gate(clean_token(market_cap_usd=100_000), th).passed)
+
+    def test_min_liquidity_floor_gates(self):
+        from rhl2_scanner.config import Thresholds
+        th = Thresholds(min_liquidity_usd=5_000, thin_liquidity_usd=5_000)
+        self.assertFalse(quick_start_gate(clean_token(liquidity_usd=3_000), th).passed)
+
+
+class TestNewSafetyGates(unittest.TestCase):
+    def setUp(self):
+        self.cfg = Config()
+
+    def test_top1_gate_disabled_when_zero(self):
+        self.cfg.thresholds.max_top1_pct = 0
+        r = score_token(clean_token(top1_supply_pct=50), self.cfg, strict_safety=True)
+        self.assertTrue(r.safety_passed)   # 0 disables the top1 gate
+
+    def test_top1_gate_active_when_set(self):
+        self.cfg.thresholds.max_top1_pct = 10
+        r = score_token(clean_token(top1_supply_pct=15), self.cfg, strict_safety=True)
+        self.assertFalse(r.safety_passed)  # 15% > 10% ceiling
+
+    def test_sniper_cluster_gate(self):
+        self.cfg.thresholds.max_sniper_cluster_pct = 15
+        r = score_token(clean_token(sniper_cluster_pct=30), self.cfg, strict_safety=True)
+        self.assertFalse(r.safety_passed)
+
 
 class TestBundles(unittest.TestCase):
     def test_common_funder_cluster_detected(self):

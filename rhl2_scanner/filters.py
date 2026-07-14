@@ -38,10 +38,16 @@ def quick_start_gate(t: TokenSnapshot, th: Thresholds) -> GateResult:
 
     if t.age_minutes is not None and t.age_minutes > th.max_age_minutes:
         fails.append(f"age {t.age_minutes:.0f}m > {th.max_age_minutes:.0f}m")
-    if t.liquidity_usd is not None and t.liquidity_usd < th.thin_liquidity_usd:
-        fails.append(f"liquidity ${t.liquidity_usd:,.0f} < thin floor ${th.thin_liquidity_usd:,.0f}")
+    if t.age_minutes is not None and th.min_age_minutes and t.age_minutes < th.min_age_minutes:
+        fails.append(f"age {t.age_minutes:.0f}m < {th.min_age_minutes:.0f}m")
+    # Liquidity floor: below the lower of thin/min = hard skip.
+    liq_floor = max(th.thin_liquidity_usd, th.min_liquidity_usd)
+    if t.liquidity_usd is not None and liq_floor and t.liquidity_usd < liq_floor:
+        fails.append(f"liquidity ${t.liquidity_usd:,.0f} < ${liq_floor:,.0f}")
     if t.market_cap_usd is not None and t.market_cap_usd > th.max_market_cap_usd:
         fails.append(f"mcap ${t.market_cap_usd:,.0f} > ${th.max_market_cap_usd:,.0f}")
+    if t.market_cap_usd is not None and th.min_market_cap_usd and t.market_cap_usd < th.min_market_cap_usd:
+        fails.append(f"mcap ${t.market_cap_usd:,.0f} < ${th.min_market_cap_usd:,.0f}")
 
     return GateResult(passed=not fails, failures=fails)
 
@@ -125,10 +131,15 @@ def safety_gate(t: TokenSnapshot, th: Thresholds, strict: bool = True,
     if s.dev_recent_sell is True:
         fails.append("dev recently sold")
 
-    # --- Distribution hard ceilings ---
+    # --- Distribution hard ceilings (0 = disabled) ---
     if t.top10_supply_pct is not None and t.top10_supply_pct > th.skip_top10_pct:
         fails.append(f"top10 {t.top10_supply_pct:.1f}% > skip {th.skip_top10_pct:.0f}%")
+    if th.max_top1_pct and t.top1_supply_pct is not None and t.top1_supply_pct > th.max_top1_pct:
+        fails.append(f"top1 {t.top1_supply_pct:.1f}% > {th.max_top1_pct:.0f}%")
     if s.bundle_supply_pct is not None and s.bundle_supply_pct > th.skip_bundle_pct:
         fails.append(f"bundled {s.bundle_supply_pct:.1f}% > skip {th.skip_bundle_pct:.0f}%")
+    if th.max_sniper_cluster_pct and s.sniper_cluster_pct is not None \
+            and s.sniper_cluster_pct > th.max_sniper_cluster_pct:
+        fails.append(f"sniper cluster {s.sniper_cluster_pct:.1f}% > {th.max_sniper_cluster_pct:.0f}%")
 
     return GateResult(passed=not fails, failures=fails)
