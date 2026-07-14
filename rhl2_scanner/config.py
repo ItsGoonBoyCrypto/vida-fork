@@ -81,6 +81,13 @@ class ChainConfig:
     lp_lockers: list = field(default_factory=list)
     lp_lock_min_fraction: float = 0.5                  # LP fraction at a locker => "locked"
 
+    # --- V3 launchpad LP-lock detection (NOXA on Robinhood Chain) ---
+    # The launcher's getLaunchedToken(token) returns the LP position NFT id +
+    # position manager + deployer, so we can check ownerOf(positionId): burned or
+    # protocol-held => safe; deployer-held => removable (rug risk).
+    launchpad_factory_address: str = "0xD9eC2db5f3D1b236843925949fe5bd8a3836FCcB"  # NOXA (4663)
+    nft_position_manager: str = "0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3"        # Uniswap V3 NPM
+
     # --- Third-party safety API (RugCheck-equivalent for EVM) ---
     # GoPlus Security token-security API is the de-facto EVM analog to RugCheck.
     # It keys chains by decimal chain id as a string (e.g. "8453" for Base).

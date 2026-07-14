@@ -222,5 +222,63 @@ class TestLpLock(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(remaining)
 
 
+class TestLaunchpadLp(unittest.IsolatedAsyncioTestCase):
+    def _cfg(self):
+        cfg = Config()
+        cfg.chain.rpc_url = "http://node"
+        cfg.chain.launchpad_factory_address = "0x" + "f" * 40
+        cfg.chain.nft_position_manager = "0x" + "e" * 40
+        return cfg
+
+    def _struct(self, deployer: str, position_id: int, exists: int = 1) -> str:
+        w = ["0" * 64] * 13
+        w[1] = _word_addr(deployer)         # deployer
+        w[3] = "0" * 64                      # positionManager (0 -> use cfg NPM)
+        w[4] = f"{position_id:064x}"         # positionId
+        w[11] = f"{exists:064x}"             # exists
+        return "0x" + "".join(w)
+
+    async def _run(self, owner: str, deployer: str, exists: int = 1):
+        from rhl2_scanner.sources.chain import (
+            EvmChainClient, _SEL_GET_LAUNCHED, _SEL_OWNER_OF)
+        from rhl2_scanner.models import SafetyReport, TokenSnapshot
+
+        def handler(payload):
+            data = payload["params"][0]["data"]
+            if data.startswith("0x" + _SEL_GET_LAUNCHED):
+                return self._struct(deployer, 42, exists)
+            if data.startswith("0x" + _SEL_OWNER_OF):
+                return "0x" + _word_addr(owner)
+            return "0x"
+
+        client = EvmChainClient(self._cfg(), session=FakeSession(handler))
+        snap = TokenSnapshot(chain="robinhood", pair_address="0xp", token_address="0x" + "a" * 40)
+        report = SafetyReport()
+        await client._check_launchpad_lp(snap, report)
+        return report
+
+    async def test_deployer_holds_lp_is_unsafe(self):
+        dep = "0x" + "d" * 40
+        r = await self._run(owner=dep, deployer=dep)
+        self.assertIs(r.lp_locked, False)          # deployer can pull -> rug risk
+
+    async def test_burned_lp_is_safe(self):
+        r = await self._run(owner="0x000000000000000000000000000000000000dEaD", deployer="0x" + "d" * 40)
+        self.assertIs(r.lp_burned, True)
+
+    async def test_protocol_held_is_locked(self):
+        r = await self._run(owner="0x" + "c" * 40, deployer="0x" + "d" * 40)
+        self.assertIs(r.lp_locked, True)
+
+    async def test_non_launchpad_token_left_unknown(self):
+        r = await self._run(owner="0x" + "c" * 40, deployer="0x" + "d" * 40, exists=0)
+        self.assertIsNone(r.lp_locked)
+        self.assertIsNone(r.lp_burned)
+
+
+def _word_addr(addr: str) -> str:
+    return addr.lower().replace("0x", "").rjust(64, "0")
+
+
 if __name__ == "__main__":
     unittest.main()
