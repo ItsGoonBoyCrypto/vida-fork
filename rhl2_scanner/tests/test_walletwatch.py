@@ -131,6 +131,20 @@ class TestWalletWatch(unittest.IsolatedAsyncioTestCase):
         w = WalletWatcher(cfg, self.storage, session=FakeSession([_buy_tx()], price=0.5))
         self.assertEqual(len(await w.poll()), 0)
 
+    async def test_unpriced_airdrop_filtered(self):
+        # No DexScreener price (spam/airdrop token) -> no alert, even though it's
+        # an incoming transfer. This is the anti-spam guard.
+        cfg = _cfg()
+        w = WalletWatcher(cfg, self.storage, session=FakeSession([_buy_tx()], price=None))
+        self.assertEqual(len(await w.poll()), 0)
+
+    async def test_zero_amount_filtered(self):
+        cfg = _cfg()
+        zero = {"hash": "0xz", "from": POOL, "to": WHALE, "contractAddress": MEME,
+                "value": "0", "tokenDecimal": "18", "tokenSymbol": "MU"}
+        w = WalletWatcher(cfg, self.storage, session=FakeSession([zero], price=0.5))
+        self.assertEqual(len(await w.poll()), 0)
+
     async def test_weth_transfer_ignored(self):
         cfg = _cfg()
         weth_in = {"hash": "0xh", "from": POOL, "to": WHALE, "contractAddress": WETH,

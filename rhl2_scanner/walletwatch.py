@@ -93,8 +93,13 @@ class WalletWatcher:
                 self.storage.mark_wallet_event(tx_key)  # mark seen regardless of size/seed
                 if seeding:
                     continue                             # silent on the first poll
+                if event.amount <= 0:
+                    continue                             # zero-value transfer
                 await self._enrich(event, dex)
-                if event.usd is not None and event.usd < self.ww.min_usd:
+                # Require a REAL, priced market ≥ min_usd. This structurally
+                # excludes airdrop/spam tokens (no DexScreener price) and dust —
+                # a whale "buy" alert should mean an actual, sized swap.
+                if event.usd is None or event.usd < self.ww.min_usd:
                     continue
                 events.append(event)
 
