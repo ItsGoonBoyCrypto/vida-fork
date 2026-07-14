@@ -33,6 +33,7 @@ from .sources.poollistener import PoolListener
 from .sources.safety import CompositeSafetySource
 from .sources.smartmoney import SmartMoneyClient
 from .storage import Storage
+from .walletwatch import WalletWatcher, format_whale_html
 from .alerting.telegram import TelegramNotifier
 
 log = logging.getLogger("rhl2.scanner")
@@ -51,6 +52,7 @@ class Scanner:
         self._listener: Optional[PoolListener] = None
         self.paper = PaperTrader(cfg, self.storage) if cfg.runtime.paper_mode else None
         self._last_digest_ts: Optional[float] = None
+        self._wallet_watcher = None  # bound to the shared session in run_once
 
     # -- lifecycle -------------------------------------------------------
 
@@ -81,6 +83,32 @@ class Scanner:
 
     def stop(self) -> None:
         self._stop.set()
+
+    async def _send_html(self, text: str) -> None:
+        """Send an HTML message to the alert channel (or stdout in dry-run)."""
+        tg = self.cfg.telegram
+        if tg.bot_token and tg.alert_chat_id:
+            from .tgtools import send_message
+            try:
+                await send_message(tg.bot_token, tg.alert_chat_id, text, self._session)
+                return
+            except Exception:
+                log.exception("send failed")
+        print("\n" + text + "\n", flush=True)
+
+    async def _poll_wallets(self) -> None:
+        if not self.cfg.wallet_watch.enabled or not self.cfg.wallet_watch.wallets:
+            return
+        if self._wallet_watcher is None:
+            self._wallet_watcher = WalletWatcher(self.cfg, self.storage, session=self._session)
+        try:
+            events = await self._wallet_watcher.poll()
+        except Exception:
+            log.exception("wallet watch poll failed")
+            return
+        for ev in events:
+            await self._send_html(format_whale_html(ev))
+            log.info("WHALE %s %s $%s by %s", ev.side, ev.symbol, ev.usd, ev.label)
 
     async def _send_startup_message(self) -> None:
         """Post a 'scanner online' message on boot (also a Telegram wiring test)."""
@@ -174,6 +202,9 @@ class Scanner:
                     reasons["low score (<%d)" % self.cfg.thresholds.watch_alert_score] += 1
             top = ", ".join(f"{k} x{v}" for k, v in reasons.most_common(6))
             log.info("no alerts | top skip reasons: %s", top or "none")
+
+        # Whale-wallet activity alerts (independent of the gem scan).
+        await self._poll_wallets()
 
         # Re-price open paper positions and record any reached checkpoints.
         if self.paper is not None:

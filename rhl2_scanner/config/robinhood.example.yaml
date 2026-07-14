@@ -110,3 +110,13 @@ telegram:
   admin_user_ids: []
 
 smart_money_wallets: []
+
+# Whale / smart-money wallet activity alerts (independent of the gem scan).
+# Fastest to enable: set env RHL2_WATCH_WALLETS=0xabc...,0xdef... in Railway.
+wallet_watch:
+  enabled: false
+  wallets: []                  # 0x addresses to track
+  labels: {}                   # optional: {"0xabc...": "Whale A"}
+  alert_on: "buys"             # "buys" | "buys_sells"
+  min_usd: 100                 # ignore transfers below this USD value
+  max_transfers_per_wallet: 25

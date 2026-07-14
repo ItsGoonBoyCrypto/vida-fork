@@ -59,6 +59,11 @@ CREATE TABLE IF NOT EXISTS paper_trades (
 );
 CREATE INDEX IF NOT EXISTS idx_paper_open ON paper_trades(settled);
 CREATE INDEX IF NOT EXISTS idx_paper_pair ON paper_trades(pair_address);
+
+CREATE TABLE IF NOT EXISTS wallet_seen (
+    tx_key  TEXT PRIMARY KEY,   -- wallet|txhash|token
+    ts      REAL NOT NULL
+);
 """
 
 
@@ -205,6 +210,19 @@ class Storage:
     def all_paper_trades(self) -> list[sqlite3.Row]:
         cur = self._conn.execute("SELECT * FROM paper_trades ORDER BY entry_ts")
         return cur.fetchall()
+
+    # -- wallet-activity dedup ------------------------------------------
+
+    def wallet_event_is_new(self, tx_key: str) -> bool:
+        cur = self._conn.execute("SELECT 1 FROM wallet_seen WHERE tx_key = ?", (tx_key,))
+        return cur.fetchone() is None
+
+    def mark_wallet_event(self, tx_key: str) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO wallet_seen (tx_key, ts) VALUES (?, ?)",
+            (tx_key, time.time()),
+        )
+        self._conn.commit()
 
 
 def _snap_summary(snap: TokenSnapshot) -> dict:

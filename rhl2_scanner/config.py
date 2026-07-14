@@ -238,11 +238,23 @@ class RuntimeConfig:
 
 
 @dataclass
+class WalletWatchConfig:
+    """Whale / smart-money wallet activity alerts."""
+    enabled: bool = False
+    wallets: list = field(default_factory=list)      # 0x addresses to track
+    labels: dict = field(default_factory=dict)       # addr(lower) -> display name
+    alert_on: str = "buys"                            # "buys" | "buys_sells"
+    min_usd: float = 100.0                            # ignore transfers below this USD
+    max_transfers_per_wallet: int = 25               # per poll, per wallet
+
+
+@dataclass
 class Config:
     chain: ChainConfig = field(default_factory=ChainConfig)
     weights: Weights = field(default_factory=Weights)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    wallet_watch: WalletWatchConfig = field(default_factory=WalletWatchConfig)
     active_tier: RiskTier = RiskTier.MOMENTUM
     tiers: dict[RiskTier, TierConfig] = field(
         default_factory=lambda: {
@@ -284,6 +296,11 @@ class Config:
         wallets = data.get("smart_money_wallets")
         if wallets:
             self.smart_money_wallets = [w.lower() for w in wallets]
+        ww = data.get("wallet_watch")
+        if ww:
+            _fill(self.wallet_watch, ww)
+            self.wallet_watch.wallets = [w.lower() for w in (self.wallet_watch.wallets or [])]
+            self.wallet_watch.labels = {k.lower(): v for k, v in (self.wallet_watch.labels or {}).items()}
 
     def _apply_env(self) -> None:
         """Secrets and overrides from env take precedence over file.
@@ -314,6 +331,15 @@ class Config:
             self.chain.dex_factory_kind = v
         if v := env.get("RHL2_DEX_ROUTER_KIND"):
             self.chain.dex_router_kind = v
+        # Whale wallets to watch — comma-separated 0x addresses (easy Railway var).
+        if v := env.get("RHL2_WATCH_WALLETS"):
+            self.wallet_watch.wallets = [w.strip().lower() for w in v.split(",") if w.strip()]
+            self.wallet_watch.enabled = True
+        if v := env.get("RHL2_WATCH_MIN_USD"):
+            try:
+                self.wallet_watch.min_usd = float(v)
+            except ValueError:
+                pass
         if v := env.get("TELEGRAM_BOT_TOKEN"):
             self.telegram.bot_token = v
         if v := env.get("TELEGRAM_ALERT_CHAT_ID"):

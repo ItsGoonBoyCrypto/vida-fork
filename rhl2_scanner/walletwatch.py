@@ -1,0 +1,179 @@
+"""Whale / smart-money wallet activity alerts.
+
+Polls a curated set of wallets' recent ERC-20 transfers (via the Blockscout
+Etherscan-compatible explorer) and alerts when one of them BUYS (receives a
+token) — or optionally SELLS — a memecoin, with a USD-size floor to skip dust.
+
+Each event is de-duplicated in SQLite so a given (wallet, tx, token) only ever
+alerts once. USD size + symbol + chart link are enriched from DexScreener.
+
+This is independent of the gem scanner's safety gates — it's pure "what are the
+whales doing right now" signal.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Any, Optional
+
+import aiohttp
+
+from .config import Config
+from .sources.dexscreener import DexScreenerClient
+from .storage import Storage
+
+log = logging.getLogger("rhl2.walletwatch")
+
+# RH "Global Dollar" stablecoin — excluded from buy/sell detection alongside WETH.
+_USDG = "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+
+
+@dataclass
+class WhaleEvent:
+    wallet: str
+    label: str
+    side: str                 # "buy" | "sell"
+    token_address: str
+    symbol: str
+    amount: float
+    usd: Optional[float]
+    tx_hash: str
+    chart_url: str = ""
+
+
+class WalletWatcher:
+    def __init__(self, cfg: Config, storage: Storage,
+                 session: Optional[aiohttp.ClientSession] = None):
+        self.cfg = cfg
+        self.ww = cfg.wallet_watch
+        self.storage = storage
+        self._session = session
+        self._owns_session = session is None
+        self._excluded = {
+            (cfg.chain.weth_address or "").lower(),
+            _USDG,
+            "",
+        }
+
+    async def __aenter__(self) -> "WalletWatcher":
+        if self._session is None:
+            timeout = aiohttp.ClientTimeout(total=self.cfg.runtime.request_timeout_seconds)
+            self._session = aiohttp.ClientSession(timeout=timeout)
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        if self._owns_session and self._session is not None:
+            await self._session.close()
+
+    def enabled(self) -> bool:
+        return bool(self.ww.enabled and self.ww.wallets and self.cfg.chain.explorer_api_url)
+
+    async def poll(self) -> list[WhaleEvent]:
+        """Return NEW, size-filtered whale events since the last poll."""
+        if not self.enabled() or self._session is None:
+            return []
+        events: list[WhaleEvent] = []
+        dex = DexScreenerClient(self.cfg, session=self._session)
+        want_sells = self.ww.alert_on == "buys_sells"
+
+        for wallet in self.ww.wallets:
+            for tx in await self._transfers(wallet):
+                event = self._classify(wallet, tx, want_sells)
+                if event is None:
+                    continue
+                tx_key = f"{wallet}|{event.tx_hash}|{event.token_address}"
+                if not self.storage.wallet_event_is_new(tx_key):
+                    continue
+                await self._enrich(event, dex)
+                self.storage.mark_wallet_event(tx_key)  # mark seen regardless of size
+                if event.usd is not None and event.usd < self.ww.min_usd:
+                    continue
+                events.append(event)
+        return events
+
+    def _classify(self, wallet: str, tx: dict, want_sells: bool) -> Optional[WhaleEvent]:
+        frm = (tx.get("from") or "").lower()
+        to = (tx.get("to") or "").lower()
+        token = (tx.get("contractAddress") or "").lower()
+        if token in self._excluded:
+            return None
+
+        if to == wallet and frm != wallet:
+            side = "buy"
+        elif frm == wallet and to != wallet and want_sells:
+            side = "sell"
+        else:
+            return None
+
+        amount = _to_amount(tx.get("value"), tx.get("tokenDecimal"))
+        return WhaleEvent(
+            wallet=wallet,
+            label=self.ww.labels.get(wallet, _short(wallet)),
+            side=side,
+            token_address=token,
+            symbol=tx.get("tokenSymbol") or "?",
+            amount=amount or 0.0,
+            usd=None,
+            tx_hash=tx.get("hash") or "",
+        )
+
+    async def _enrich(self, event: WhaleEvent, dex: DexScreenerClient) -> None:
+        for pair in await dex.pairs_for_token(event.token_address):
+            if pair.price_usd is not None:
+                event.usd = round(event.amount * pair.price_usd, 2)
+                event.chart_url = pair.dexscreener_url
+                if pair.symbol:
+                    event.symbol = pair.symbol
+                break
+
+    async def _transfers(self, wallet: str) -> list[dict]:
+        params: dict[str, Any] = {
+            "module": "account",
+            "action": "tokentx",
+            "address": wallet,
+            "page": 1,
+            "offset": self.ww.max_transfers_per_wallet,
+            "sort": "desc",
+        }
+        if self.cfg.chain.explorer_api_key:
+            params["apikey"] = self.cfg.chain.explorer_api_key
+        try:
+            async with self._session.get(self.cfg.chain.explorer_api_url, params=params) as resp:
+                if resp.status != 200:
+                    return []
+                data = await resp.json()
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            return []
+        result = data.get("result")
+        return result if isinstance(result, list) else []
+
+
+def _to_amount(value: Any, decimals: Any) -> Optional[float]:
+    try:
+        return int(value) / (10 ** int(decimals or 18))
+    except (TypeError, ValueError):
+        return None
+
+
+def _short(addr: str) -> str:
+    return f"{addr[:6]}…{addr[-4:]}" if addr and len(addr) > 12 else addr
+
+
+def format_whale_html(e: WhaleEvent) -> str:
+    from html import escape
+    emoji = "🐋🟢" if e.side == "buy" else "🐋🔴"
+    verb = "BOUGHT" if e.side == "buy" else "SOLD"
+    usd = f" (~${e.usd:,.0f})" if e.usd is not None else ""
+    amt = f"{e.amount:,.2f}" if e.amount else "?"
+    lines = [
+        f"{emoji} <b>WHALE {verb}</b> — {escape(e.label)}",
+        f"{verb.title()} {amt} <b>${escape(e.symbol)}</b>{usd}",
+        f"CA: {escape(e.token_address)}",
+    ]
+    links = []
+    if e.chart_url:
+        links.append(f'<a href="{escape(e.chart_url)}">Chart</a>')
+    if links:
+        lines.append("Links: " + " | ".join(links))
+    return "\n".join(lines)
