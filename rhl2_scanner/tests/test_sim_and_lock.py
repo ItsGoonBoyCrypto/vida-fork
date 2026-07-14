@@ -126,6 +126,28 @@ class TestV3SellSim(unittest.IsolatedAsyncioTestCase):
         )[:4].hex()
         self.assertEqual(sel, "04e45aaf")
 
+    async def test_v3_contract_sim_reports_buy_tax(self):
+        cfg = self._cfg()
+        cfg.chain.honeypot_simulator_bytecode = "0x6001"   # dummy; fake node returns values
+        # simulateV3 -> buyTaxBps=300 (3%), roundTripBps=800, bought=1000, sold=9, ok=1
+        ret = ("0x" + f"{300:064x}" + f"{800:064x}" + f"{1000:064x}"
+               + f"{9:064x}" + f"{1:064x}")
+        sel_v3 = keccak256(b"simulateV3(address,address,address,uint24,uint256)")[:4].hex()
+
+        def handler(payload):
+            data = payload["params"][0]["data"]
+            if data.startswith("0x" + sel_v3):
+                return ret
+            return "0x"
+
+        from rhl2_scanner.models import TokenSnapshot
+        snap = TokenSnapshot(chain="robinhood", pair_address="0xp", token_address="0x" + "a" * 40)
+        sim = HoneypotSimulator(cfg, session=FakeSession(handler))
+        report = await sim.check(snap)
+        self.assertAlmostEqual(report.buy_tax_pct, 3.0, places=2)
+        self.assertFalse(report.is_honeypot)     # sold>0, round-trip 8% < 50%
+        self.assertIsNone(report.sell_tax_pct)   # not isolated on V3
+
     async def test_v3_sell_success_marks_not_honeypot(self):
         cfg = self._cfg()
         calls = {"n": 0}

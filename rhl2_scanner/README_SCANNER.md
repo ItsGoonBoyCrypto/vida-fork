@@ -32,6 +32,11 @@ plumbing is functional but must be pointed at RH L2's live endpoints.
 | SQLite persistence (dedupe, cooldown, alert history) | ✅ complete |
 | Telegram notifier + `/status /tier /set /addwallet` commands | ✅ complete² |
 | **Paper-trading / live calibration mode** | ✅ records would-be entries, re-prices at 1h/6h/24h, win-rate by band |
+| **Whale-wallet activity tracker + alerts** | ✅ buy/sell alerts, USD-filtered, deduped |
+| **V3 LP-lock detection (NOXA launchpad NFT ownerOf)** | ✅ deployer-held LP = rug risk → blocked |
+| **V3 honeypot sell-sim + buy-tax contract sim** | ✅ exactInputSingle per fee tier; buy tax isolated |
+| **Pragmatic live safety** (tolerate-unknown on a new chain) | ✅ enforces confirmable metrics, blocks confirmed-bad |
+| Skip-reason breakdown logging (data-driven tuning) | ✅ per-cycle top reasons |
 | Backtest / historical replay harness | ✅ harness done; supply your dataset |
 | Real Robinhood Chain config + `.env` + Dockerfile + systemd | ✅ VPS-ready |
 | EVM chain client (verify, authorities, LP-burn, holders) | ⚙️ works on standard EVM; **set RH L2 rpc/explorer** |
@@ -111,6 +116,7 @@ rhl2_scanner/
   contracts/HoneypotSimulator.sol   buy+sell simulator (runtime bytecode via stateOverride)
   storage.py         SQLite: seen tokens, alert history, re-alert cooldown
   scanner.py         async orchestration loop
+  walletwatch.py     whale-wallet activity tracker + alerts
   paper.py           paper-trading recorder + settler + calibration report
   backtest.py        historical replay -> alert precision
   sources/

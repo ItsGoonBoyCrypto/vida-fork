@@ -113,32 +113,31 @@ class HoneypotSimulator:
         chain = self.cfg.chain
         if not (chain.rpc_url and chain.dex_router_address and chain.weth_address):
             return
-        code = chain.honeypot_simulator_bytecode
-        code = code if code.startswith("0x") else "0x" + code
+        if chain.dex_router_kind == "univ3":
+            await self._contract_sim_v3(snap, report)
+        else:
+            await self._contract_sim_v2(snap, report)
+
+    async def _contract_sim_v2(self, snap: TokenSnapshot, report: SafetyReport) -> None:
+        chain = self.cfg.chain
+        code = _hexcode(chain.honeypot_simulator_bytecode)
         sim_addr = chain.honeypot_simulator_address
         amount = int(chain.honeypot_sim_amount_wei)
-
         selector = keccak256(b"simulate(address,address,address,uint256)")[:4].hex()
         data = (
-            "0x" + selector
-            + _addr(snap.token_address)
-            + _addr(chain.dex_router_address)
-            + _addr(chain.weth_address)
-            + _w(amount)
+            "0x" + selector + _addr(snap.token_address) + _addr(chain.dex_router_address)
+            + _addr(chain.weth_address) + _w(amount)
         )
         overrides = {
             sim_addr.lower(): {"code": code},
-            BURNER: {"balance": "0x" + _w(amount * 4)},   # fund the caller to send `value`
+            BURNER: {"balance": "0x" + _w(amount * 4)},
         }
-        status, result = await self._call_status_raw(
-            sim_addr, data, overrides, frm=BURNER, value=amount
-        )
+        status, result = await self._call_status_raw(sim_addr, data, overrides, frm=BURNER, value=amount)
         if status == "revert":
-            # A revert inside the simulator's sell path = not sellable.
             report.is_honeypot = True
             return
         if status != "ok" or not result:
-            return   # couldn't determine -> leave None
+            return
         words = _decode_words(result, 5)
         if words is None:
             return
@@ -146,6 +145,41 @@ class HoneypotSimulator:
         report.buy_tax_pct = round(buy_bps / 100.0, 2)
         report.sell_tax_pct = round(sell_bps / 100.0, 2)
         report.is_honeypot = not (bool(ok) and bought > 0 and sold_eth > 0)
+
+    async def _contract_sim_v3(self, snap: TokenSnapshot, report: SafetyReport) -> None:
+        """V3 simulate: buy tax + round-trip loss + sellability, per fee tier.
+
+        Reports buy_tax_pct (cleanly isolated) and is_honeypot (not sellable).
+        Sell tax isn't isolatable on V3 in one call, so it's left None; the
+        round-trip loss guards against punitive-tax/honeypot tokens.
+        """
+        chain = self.cfg.chain
+        code = _hexcode(chain.honeypot_simulator_bytecode)
+        sim_addr = chain.honeypot_simulator_address
+        amount = int(chain.honeypot_sim_amount_wei)
+        selector = keccak256(b"simulateV3(address,address,address,uint24,uint256)")[:4].hex()
+        overrides = {
+            sim_addr.lower(): {"code": code},
+            BURNER: {"balance": "0x" + _w(amount * 4)},
+        }
+        for fee in chain.dex_v3_fee_tiers:
+            data = (
+                "0x" + selector + _addr(snap.token_address) + _addr(chain.dex_router_address)
+                + _addr(chain.weth_address) + _w(int(fee)) + _w(amount)
+            )
+            status, result = await self._call_status_raw(sim_addr, data, overrides, frm=BURNER, value=amount)
+            if status != "ok" or not result:
+                continue
+            words = _decode_words(result, 5)
+            if words is None:
+                continue
+            buy_bps, roundtrip_bps, bought, sold_eth, ok = words
+            if not (bool(ok) and bought > 0):
+                continue   # no pool at this fee tier / not tradeable — try next
+            report.buy_tax_pct = round(buy_bps / 100.0, 2)
+            report.is_honeypot = sold_eth == 0 or roundtrip_bps >= 5000  # >=50% round-trip loss
+            return
+        # No tier produced a tradeable result -> leave facts None (sell-sim/fallback covers it)
 
     # -- external API strategy -------------------------------------------
 
@@ -342,6 +376,10 @@ class HoneypotSimulator:
         if "revert" in err.lower() or "execution reverted" in err.lower() or "insufficient" in err.lower():
             return "revert", err
         return "error", None
+
+
+def _hexcode(code: str) -> str:
+    return code if code.startswith("0x") else "0x" + code
 
 
 def _decode_words(result: str, n: int) -> Optional[tuple[int, ...]]:
