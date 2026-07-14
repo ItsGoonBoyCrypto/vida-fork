@@ -174,6 +174,17 @@ class EvmChainClient:
         position_manager = ("0x" + words[3][-40:]) if int(words[3], 16) else npm
         position_id = int(words[4], 16)
 
+        # Dev/creator holdings from the launchpad-reported deployer (reliable).
+        if report.dev_holdings_pct is None:
+            supply = await self._eth_call(token, _SEL_TOTAL_SUPPLY)
+            bal = await self._eth_call(token, "0x70a08231" + _pad_addr(deployer))
+            try:
+                s, b = int(supply, 16), int(bal, 16)
+                if s > 0:
+                    report.dev_holdings_pct = round(100.0 * b / s, 2)
+            except (TypeError, ValueError):
+                pass
+
         owner = await self._owner_of(position_manager or npm, position_id)
         if owner is None:
             return

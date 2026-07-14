@@ -114,9 +114,13 @@ smart_money_wallets: []
 # Whale / smart-money wallet activity alerts (independent of the gem scan).
 # Fastest to enable: set env RHL2_WATCH_WALLETS=0xabc...,0xdef... in Railway.
 wallet_watch:
-  enabled: false
-  wallets: []                  # 0x addresses to track
-  labels: {}                   # optional: {"0xabc...": "Whale A"}
-  alert_on: "buys"             # "buys" | "buys_sells"
+  enabled: true
+  wallets:
+    - "0xc1254fc2ccbab582842c27c61664a62bf8679d48"
+    - "0x5638484ba2d2f1d1d35020572b0aa439a9869192"
+  labels:
+    "0xc1254fc2ccbab582842c27c61664a62bf8679d48": "Whale 1"
+    "0x5638484ba2d2f1d1d35020572b0aa439a9869192": "Whale 2"
+  alert_on: "buys_sells"       # alert on both entries and exits
   min_usd: 100                 # ignore transfers below this USD value
   max_transfers_per_wallet: 25
