@@ -159,6 +159,22 @@ class Scanner:
         tasks = [self._process(snap) for snap in candidates]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
+        # Visibility: why did candidates NOT alert this cycle? Aggregate the
+        # gate-failure reasons + low-score count so tuning is data-driven.
+        scored = [r for r in results if isinstance(r, ScoreResult)]
+        alerted = sum(1 for r in scored if r.level in (AlertLevel.STRONG, AlertLevel.WATCH))
+        if scored and alerted == 0:
+            from collections import Counter
+            reasons: Counter = Counter()
+            for r in scored:
+                if not r.safety_passed:
+                    for f in r.gate_failures:
+                        reasons[f.split(" (")[0]] += 1   # collapse "(unconfirmed)"
+                elif r.level == AlertLevel.SKIP:
+                    reasons["low score (<%d)" % self.cfg.thresholds.watch_alert_score] += 1
+            top = ", ".join(f"{k} x{v}" for k, v in reasons.most_common(6))
+            log.info("no alerts | top skip reasons: %s", top or "none")
+
         # Re-price open paper positions and record any reached checkpoints.
         if self.paper is not None:
             try:

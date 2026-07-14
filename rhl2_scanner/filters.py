@@ -63,12 +63,17 @@ def safety_gate(t: TokenSnapshot, th: Thresholds, strict: bool = True,
     """
     s = t.safety
     fails: list[str] = []
-    tolerate_unknown = pragmatic  # honeypot/tax/score may be None under pragmatic
+    # Under pragmatic, facts we can't yet confirm on this chain (verified,
+    # authorities, LP, honeypot/tax/score) are tolerated when *unknown* (None) —
+    # but a CONFIRMED-bad (False / over-limit) still fails. This enforces the
+    # signals we can compute on-chain (honeypot sell-sim, distribution, bundle,
+    # dev) while not auto-skipping every token on a new V3 launchpad chain.
+    tolerate_unknown = pragmatic
 
     def require_true(value, label: str) -> None:
         if value is True:
             return
-        if value is None and not strict:
+        if value is None and (not strict or tolerate_unknown):
             return
         fails.append(label if value is False else f"{label} (unconfirmed)")
 
@@ -100,7 +105,10 @@ def safety_gate(t: TokenSnapshot, th: Thresholds, strict: bool = True,
                 f"{th.min_lp_lock_seconds // 86400}d min"
             )
     else:
-        if strict or s.lp_locked is False:
+        # V3 LP is an NFT position, not a fungible token, so our V2-style
+        # burn/lock read comes back None. Tolerate unknown under pragmatic;
+        # only fail on an explicitly-unsafe LP.
+        if (strict and not tolerate_unknown) or s.lp_locked is False:
             fails.append("LP not locked or burned")
 
     # --- External rug score / flags ---
