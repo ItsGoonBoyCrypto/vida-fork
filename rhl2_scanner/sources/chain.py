@@ -120,15 +120,17 @@ class EvmChainClient:
             source = (entry.get("SourceCode") or "").strip()
             report.contract_verified = bool(source)
 
-        # Authority checks: an owner of 0x0 (renounced) => mint/pause disabled.
+        # Authority checks. A renounced owner (0x0) => mint/pause disabled => safe.
+        # But a NON-zero owner does NOT prove the token is mintable/pausable —
+        # most tokens keep an owner for legit reasons. Marking it False here
+        # caused false "authority not revoked" skips on launchpad tokens, so we
+        # leave it UNKNOWN (None) unless renounced; a real mint/pause function
+        # would be confirmed by GoPlus or bytecode analysis, not owner() alone.
         owner = await self._read_owner(token)
-        if owner is not None:
-            renounced = owner.lower() in BURN_ADDRESSES
-            # We cannot prove *no* mint fn without bytecode analysis, but a
-            # renounced owner disables owner-gated mint/pause on the common
-            # OpenZeppelin patterns. Report conservatively.
-            report.mint_authority_revoked = renounced
-            report.freeze_authority_revoked = renounced
+        if owner is not None and owner.lower() in BURN_ADDRESSES:
+            report.mint_authority_revoked = True
+            report.freeze_authority_revoked = True
+        # else: leave None (unknown) — pragmatic mode tolerates, strict gates.
 
         # LP safety: is the LP token burned (dead balance ~= supply)? (V2-style)
         report.lp_burned = await self._lp_burned(snap.pair_address)
@@ -250,41 +252,95 @@ class EvmChainClient:
     # -- DistributionSource ---------------------------------------------
 
     async def enrich_distribution(self, snap: TokenSnapshot) -> TokenSnapshot:
+        # Blockscout (RH Chain's explorer) first; Etherscan-style legacy fallback.
+        if await self._enrich_distribution_v2(snap):
+            return snap
+        await self._enrich_distribution_legacy(snap)
+        return snap
+
+    def _excluded_addrs(self, snap: TokenSnapshot) -> set:
+        ex = {a.lower() for a in self.chain.excluded_holder_addresses}
+        ex |= BURN_ADDRESSES
+        ex.add(snap.pair_address.lower())   # the AMM pool isn't a "holder"
+        return ex
+
+    async def _enrich_distribution_v2(self, snap: TokenSnapshot) -> bool:
+        """Blockscout v2: /api/v2/tokens/{addr} + /holders. Returns True on success."""
+        base = self._v2_base()
+        if not base or self._session is None:
+            return False
+        token = snap.token_address
+        info = await self._bs_get(f"/tokens/{token}")
+        holders = await self._bs_get(f"/tokens/{token}/holders")
+        items = holders.get("items") if isinstance(holders, dict) else None
+        if not isinstance(items, list) or not items:
+            return False
+
+        excluded = self._excluded_addrs(snap)
+        parsed: list[tuple[str, float]] = []
+        for h in items:
+            addr = ((h.get("address") or {}).get("hash") or "").lower()
+            qty = _to_float(h.get("value"))
+            if addr and qty is not None:
+                parsed.append((addr, qty))
+        if not parsed:
+            return False
+
+        total = _to_float((info or {}).get("total_supply")) or sum(q for _, q in parsed)
+        if total <= 0:
+            return False
+        non_lp = [(a, q) for a, q in parsed if a not in excluded]
+        non_lp.sort(key=lambda x: x[1], reverse=True)
+
+        # True holder count from token info (not page-limited); fall back to page size.
+        hc = _to_int((info or {}).get("holders") or (info or {}).get("holder_count"))
+        snap.holder_count = hc if hc else len(non_lp)
+        if non_lp:
+            snap.top10_supply_pct = round(100.0 * sum(q for _, q in non_lp[:10]) / total, 2)
+            snap.top1_supply_pct = round(100.0 * non_lp[0][1] / total, 2)
+        return True
+
+    async def _enrich_distribution_legacy(self, snap: TokenSnapshot) -> None:
         holders = await self._explorer(
-            {
-                "module": "token",
-                "action": "tokenholderlist",
-                "contractaddress": snap.token_address,
-                "page": 1,
-                "offset": 100,
-            }
+            {"module": "token", "action": "tokenholderlist",
+             "contractaddress": snap.token_address, "page": 1, "offset": 100}
         )
         if not isinstance(holders, list) or not holders:
-            return snap  # leave counts as None => distribution scored on what we have
-
-        excluded = {a.lower() for a in self.chain.excluded_holder_addresses}
-        excluded |= BURN_ADDRESSES
-        excluded.add(snap.pair_address.lower())
-
+            return
+        excluded = self._excluded_addrs(snap)
         parsed: list[tuple[str, float]] = []
         for h in holders:
             addr = (h.get("TokenHolderAddress") or h.get("address") or "").lower()
             qty = _to_float(h.get("TokenHolderQuantity") or h.get("value"))
             if addr and qty is not None:
                 parsed.append((addr, qty))
-
         total = sum(q for _, q in parsed)
         if total <= 0:
-            return snap
-
+            return
         non_lp = [(a, q) for a, q in parsed if a not in excluded]
         non_lp.sort(key=lambda x: x[1], reverse=True)
-
         snap.holder_count = len(non_lp)
         if non_lp:
-            top10 = sum(q for _, q in non_lp[:10])
-            snap.top10_supply_pct = 100.0 * top10 / total
-            snap.top1_supply_pct = 100.0 * non_lp[0][1] / total
+            snap.top10_supply_pct = round(100.0 * sum(q for _, q in non_lp[:10]) / total, 2)
+            snap.top1_supply_pct = round(100.0 * non_lp[0][1] / total, 2)
+
+    def _v2_base(self) -> str:
+        base = (self.chain.explorer_api_url or "").rstrip("/")
+        if not base:
+            return ""
+        return base + "/v2" if base.endswith("/api") else base
+
+    async def _bs_get(self, path: str):
+        base = self._v2_base()
+        if not base or self._session is None:
+            return None
+        try:
+            async with self._session.get(base + path) as resp:
+                if resp.status != 200:
+                    return None
+                return await resp.json()
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            return None
         return snap
 
     # New-pool discovery is implemented in ``sources.poollistener.PoolListener``

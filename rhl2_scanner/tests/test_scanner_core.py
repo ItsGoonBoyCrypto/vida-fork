@@ -184,6 +184,24 @@ class TestBundles(unittest.TestCase):
         self.assertGreaterEqual(res.largest_cluster_wallets, 4)
         self.assertGreater(res.bundle_supply_pct, 30)
 
+    def test_launchpad_buyers_not_flagged_as_bundle(self):
+        # Every buyer funded by the pool/launchpad must NOT count as one bundle.
+        pool = "0xpool"
+        transfers = [Transfer(block=0, from_addr="0x0", to_addr=pool, value=1000)]
+        for i in range(6):  # 6 buyers all funded by the pool
+            transfers.append(Transfer(block=1 + i, from_addr=pool, to_addr=f"0xbuyer{i}", value=50))
+        res = analyze_bundles(transfers, total_supply=1000, launch_block=0, infra={pool})
+        self.assertEqual(res.bundle_supply_pct, 0.0)   # pool-funded buys aren't a bundle
+
+    def test_real_bundle_still_detected_with_infra(self):
+        # A real bundler (non-infra) seeding fresh wallets is still caught.
+        pool = "0xpool"
+        transfers = [Transfer(block=0, from_addr="0x0", to_addr=pool, value=1000)]
+        for i in range(4):
+            transfers.append(Transfer(block=1, from_addr="0xbundler", to_addr=f"0xw{i}", value=100))
+        res = analyze_bundles(transfers, total_supply=1000, launch_block=0, infra={pool})
+        self.assertGreater(res.bundle_supply_pct, 30)
+
     def test_sniper_window(self):
         transfers = [
             Transfer(block=0, from_addr="0x0", to_addr="0xpool", value=1000),

@@ -45,14 +45,20 @@ def analyze_bundles(
     launch_block: Optional[int] = None,
     launch_window_blocks: int = 3,
     min_cluster_size: int = 3,
+    infra: Optional[set] = None,
 ) -> BundleResult:
     """Detect coordinated accumulation from raw transfers.
 
     ``transfers`` should be the token's transfer log (ascending block order).
     ``total_supply`` is used to express clusters as a % of supply.
+    ``infra`` = pool/router/factory/launchpad/burn/WETH addresses. On a launchpad
+    every buyer is funded BY the pool/launchpad, which would otherwise flag every
+    holder as one giant "bundle" (false positive) — so infra addresses are
+    excluded both as cluster funders and as sniper/holder participants.
     """
     if total_supply <= 0 or not transfers:
         return BundleResult(None, None, 0)
+    infra = {a.lower() for a in (infra or set())}
 
     # Net holdings per wallet (incoming - outgoing), plus first-seen block.
     holdings: dict[str, float] = defaultdict(float)
@@ -68,17 +74,21 @@ def analyze_bundles(
     if launch_block is None:
         launch_block = min(tx.block for tx in transfers)
 
-    # 1) Snipers: wallets first acquiring within the launch window.
+    # 1) Snipers: wallets first acquiring within the launch window (excl. infra).
     sniper_supply = sum(
         max(0.0, holdings[w])
         for w, b in first_block.items()
-        if b <= launch_block + launch_window_blocks
+        if b <= launch_block + launch_window_blocks and w not in infra
     )
     sniper_pct = 100.0 * sniper_supply / total_supply
 
-    # 2) Common-funder clusters (>= min_cluster_size wallets, same funder).
+    # 2) Common-funder clusters: fresh wallets seeded by the SAME NON-infra
+    #    address. Buyers funded by the pool/router/launchpad are normal, not a
+    #    bundle, so those funders are skipped.
     by_funder: dict[str, list[str]] = defaultdict(list)
     for wallet, src in funder.items():
+        if src in infra or wallet in infra:
+            continue
         by_funder[src].append(wallet)
 
     largest = 0
@@ -118,10 +128,23 @@ class BundleAnalyzer:
         transfers, supply = await self._fetch_transfers(snap.token_address)
         if not transfers or supply <= 0:
             return snap
-        result = analyze_bundles(transfers, supply)
+        result = analyze_bundles(transfers, supply, infra=self._infra(snap))
         snap.safety.bundle_supply_pct = result.bundle_supply_pct
         snap.safety.sniper_cluster_pct = result.sniper_cluster_pct
         return snap
+
+    def _infra(self, snap: TokenSnapshot) -> set:
+        """Pool/router/factory/launchpad/NPM/burn/WETH — not real 'bundlers'."""
+        c = self.cfg.chain
+        addrs = {
+            snap.pair_address, c.dex_router_address, c.dex_factory_address,
+            c.weth_address, c.launchpad_factory_address, c.nft_position_manager,
+        }
+        addrs |= set(c.excluded_holder_addresses)
+        infra = {a.lower() for a in addrs if a}
+        infra |= {"0x000000000000000000000000000000000000dead",
+                  "0x0000000000000000000000000000000000000000"}
+        return infra
 
     async def _fetch_transfers(self, token: str) -> tuple[list[Transfer], float]:
         explorer = self.cfg.chain.explorer_api_url
