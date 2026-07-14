@@ -188,8 +188,10 @@ class Scanner:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Visibility: why did candidates NOT alert this cycle? Aggregate the
-        # gate-failure reasons + low-score count so tuning is data-driven.
-        scored = [r for r in results if isinstance(r, ScoreResult)]
+        # gate-failure reasons + low-score count, and show the BEST candidate's
+        # full score breakdown so tuning is precise (gate vs scoring vs data).
+        pairs_scored = [(candidates[i], r) for i, r in enumerate(results) if isinstance(r, ScoreResult)]
+        scored = [r for _, r in pairs_scored]
         alerted = sum(1 for r in scored if r.level in (AlertLevel.STRONG, AlertLevel.WATCH))
         if scored and alerted == 0:
             from collections import Counter
@@ -202,6 +204,21 @@ class Scanner:
                     reasons["low score (<%d)" % self.cfg.thresholds.watch_alert_score] += 1
             top = ", ".join(f"{k} x{v}" for k, v in reasons.most_common(6))
             log.info("no alerts | top skip reasons: %s", top or "none")
+
+            # Best near-miss, with per-category breakdown + missing data.
+            snap, best = max(pairs_scored, key=lambda sr: sr[1].composite)
+            cats = " ".join(f"{c.name[:3]}={c.raw:.0f}" for c in best.categories)
+            missing = [k for k, v in (
+                ("holders", snap.holder_count), ("top10", snap.top10_supply_pct),
+                ("bundle", snap.safety.bundle_supply_pct), ("verified", snap.safety.contract_verified),
+                ("lp", snap.safety.lp_burned if snap.safety.lp_burned is not None else snap.safety.lp_locked),
+            ) if v is None]
+            log.info(
+                "best: $%s score=%.0f [%s] safety_passed=%s%s%s",
+                snap.symbol or "?", best.composite, cats, best.safety_passed,
+                (" gate=" + "; ".join(best.gate_failures[:3])) if best.gate_failures else "",
+                (" missing_data=" + ",".join(missing)) if missing else "",
+            )
 
         # Whale-wallet activity alerts (independent of the gem scan).
         await self._poll_wallets()
