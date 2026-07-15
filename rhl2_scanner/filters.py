@@ -26,6 +26,15 @@ class GateResult:
         return self.passed
 
 
+_STOCK_NAME_MARKERS = ("robinhood token",)   # tokenized equities (MU/TSLA/… • Robinhood Token)
+
+
+def is_stock_token(t: TokenSnapshot) -> bool:
+    """True for Robinhood tokenized-stock tokens (equities, not memecoins)."""
+    name = (t.name or "").lower()
+    return any(m in name for m in _STOCK_NAME_MARKERS)
+
+
 def quick_start_gate(t: TokenSnapshot, th: Thresholds) -> GateResult:
     """Cheap pre-screen using only DexScreener-level data (§6 filter stack).
 

@@ -23,7 +23,7 @@ import aiohttp
 
 from .bundle import BundleAnalyzer
 from .config import Config
-from .filters import quick_start_gate, safety_gate
+from .filters import is_stock_token, quick_start_gate, safety_gate
 from .models import AlertLevel, RiskTier, ScoreResult, TokenSnapshot
 from .paper import PaperTrader
 from .scoring import score_token
@@ -179,6 +179,13 @@ class Scanner:
             "discovered %d pairs (dexscreener=%d, factory=%d)",
             len(pairs), len(dex_pairs), len(fresh_pairs),
         )
+
+        # Drop tokenized stocks (MU/TSLA/… "• Robinhood Token") — not memecoins.
+        if self.cfg.chain.exclude_stock_tokens:
+            before = len(pairs)
+            pairs = [p for p in pairs if not is_stock_token(p)]
+            if before != len(pairs):
+                log.info("excluded %d tokenized stocks", before - len(pairs))
 
         th = self.cfg.thresholds
         candidates = [p for p in pairs if quick_start_gate(p, th).passed]

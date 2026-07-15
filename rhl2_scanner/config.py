@@ -45,6 +45,9 @@ class ChainConfig:
     explorer_api_key: str = ""                         # Blockscout works without a key
     dexscreener_chain: str = "robinhood"               # confirmed live slug
     native_symbol: str = "ETH"
+    # RH Chain mixes tokenized STOCKS (MU/TSLA/SPCX/… named "• Robinhood Token")
+    # with memecoins. Skip the equities — they're not gems.
+    exclude_stock_tokens: bool = True
     weth_address: str = ""                             # wrapped-native for pair/router math
     # Addresses excluded from holder-distribution math (LP pools, burn, locker)
     excluded_holder_addresses: list[str] = field(default_factory=list)

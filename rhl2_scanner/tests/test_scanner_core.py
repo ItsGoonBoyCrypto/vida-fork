@@ -142,6 +142,11 @@ class TestQuickStartGate(unittest.TestCase):
     def test_clean_passes(self):
         self.assertTrue(quick_start_gate(clean_token(), self.th).passed)
 
+    def test_stock_token_detection(self):
+        from rhl2_scanner.filters import is_stock_token
+        self.assertTrue(is_stock_token(clean_token(name="Micron Technology • Robinhood Token")))
+        self.assertFalse(is_stock_token(clean_token(name="Pepe Rocket")))
+
     def test_min_market_cap_floor_gates(self):
         from rhl2_scanner.config import Thresholds
         th = Thresholds(min_market_cap_usd=40_000)
