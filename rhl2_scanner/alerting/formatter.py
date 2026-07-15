@@ -83,7 +83,8 @@ def build_lines(snap: TokenSnapshot, result: ScoreResult) -> list[str]:
 
     lines = [
         f"{header} - Score: {result.composite:.0f}/100",
-        f"Token: ${snap.symbol or '???'} (CA: {snap.token_address})",
+        f"Token: ${snap.symbol or '???'}",
+        f"CA: {snap.token_address}",
         f"Age: {_age(snap.age_minutes)} | MCAP: {_usd(snap.market_cap_usd)} | Liq: {_usd(snap.liquidity_usd)}",
         f"Holders: {holders}{growing} | Top10: {_pct(snap.top10_supply_pct)}",
         f"Volume 1h: {_usd(snap.volume_1h)}{accel} | Buy Ratio: {buy_ratio}",
@@ -117,7 +118,13 @@ def to_plain(snap: TokenSnapshot, result: ScoreResult) -> str:
 
 
 def to_telegram_html(snap: TokenSnapshot, result: ScoreResult) -> str:
-    lines = [escape(line) for line in build_lines(snap, result)]
+    lines = []
+    for line in build_lines(snap, result):
+        if line.startswith("CA: ") and snap.token_address:
+            # <code> makes the address tap-to-copy in Telegram.
+            lines.append(f"CA: <code>{escape(snap.token_address)}</code>")
+        else:
+            lines.append(escape(line))
     link_bits = []
     if snap.dexscreener_url:
         link_bits.append(f'<a href="{escape(snap.dexscreener_url)}">DexScreener</a>')

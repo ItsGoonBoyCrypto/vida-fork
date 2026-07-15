@@ -184,7 +184,7 @@ def format_whale_html(e: WhaleEvent) -> str:
     lines = [
         f"{emoji} <b>WHALE {verb}</b> — {escape(e.label)}",
         f"{verb.title()} {amt} <b>${escape(e.symbol)}</b>{usd}",
-        f"CA: {escape(e.token_address)}",
+        f"CA: <code>{escape(e.token_address)}</code>",   # tap-to-copy in Telegram
     ]
     links = []
     if e.chart_url:

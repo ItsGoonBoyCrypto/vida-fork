@@ -227,6 +227,12 @@ class TestFormatter(unittest.TestCase):
         self.assertIn("<a href=", html)
         self.assertIn("<b>", html)
 
+    def test_ca_is_copyable_code(self):
+        snap = clean_token()
+        r = score_token(snap, Config(), strict_safety=True)
+        html = to_telegram_html(snap, r)
+        self.assertIn(f"CA: <code>{snap.token_address}</code>", html)  # tap-to-copy
+
 
 if __name__ == "__main__":
     unittest.main()
