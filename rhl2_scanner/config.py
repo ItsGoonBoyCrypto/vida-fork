@@ -176,6 +176,10 @@ class Thresholds:
     min_volume_24h_usd: float = 10_000
     min_buy_ratio_1h: float = 0.60             # 60% buys by count
     strong_buy_ratio_1h: float = 0.70
+    # Short-term velocity (5m rate vs 1h rate) — the earliest momentum tell.
+    # >= this ratio means the last 5 minutes are running hotter than the hour.
+    min_volume_velocity: float = 1.2
+    strong_volume_velocity: float = 2.0
 
     # Smart money
     smart_money_min_wallets: int = 2

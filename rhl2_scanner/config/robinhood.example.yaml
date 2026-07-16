@@ -82,6 +82,11 @@ tiers:
       min_volume_24h_usd: 10000
       min_buy_ratio_1h: 0.60
       strong_buy_ratio_1h: 0.70
+      # Short-term velocity: last-5-min volume rate vs the trailing 1h rate.
+      # This is the EARLIEST momentum tell — moves within minutes of launch.
+      # 1.2 = last 5 min running 20% hotter than the hour; 2.0 = surging (2x).
+      min_volume_velocity: 1.2
+      strong_volume_velocity: 2.0
       min_external_risk_score: 60
       smart_money_min_wallets: 2
       strong_alert_score: 75        # >= 75 = Strong alert

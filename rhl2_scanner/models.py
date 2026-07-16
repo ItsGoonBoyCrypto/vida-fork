@@ -146,6 +146,51 @@ class TokenSnapshot:
             return self.volume_1h > 0
         return self.volume_1h > avg_hourly
 
+    @property
+    def buy_ratio_5m(self) -> Optional[float]:
+        """Fraction of last-5-min transactions that were buys (0-1).
+
+        The freshest read on buy pressure — for a token minutes old this
+        reacts long before the 1h bucket has meaningful data.
+        """
+        if self.buys_5m is None or self.sells_5m is None:
+            return None
+        total = self.buys_5m + self.sells_5m
+        return (self.buys_5m / total) if total else None
+
+    @property
+    def volume_velocity(self) -> Optional[float]:
+        """Ratio of the last-5-min hourly-equivalent rate to the trailing 1h.
+
+        ``volume_5m * 12`` projects the last 5 minutes to an hourly rate; we
+        divide by ``volume_1h`` to see whether *right now* is running hotter
+        than the trailing hour. >1 = accelerating, <1 = cooling. This is the
+        earliest momentum tell — it moves within minutes of a launch, well
+        before the 1h-vs-24h signal has any 24h history to compare against.
+        """
+        if self.volume_5m is None or not self.volume_1h:
+            return None
+        return (self.volume_5m * 12.0) / self.volume_1h
+
+    @property
+    def short_term_accelerating(self) -> Optional[bool]:
+        """True when the 5-min rate is meaningfully above the 1h rate."""
+        v = self.volume_velocity
+        if v is None:
+            return None
+        return v >= 1.2
+
+    @property
+    def price_velocity(self) -> Optional[float]:
+        """Last-5-min hourly-equivalent price move vs the trailing 1h move.
+
+        Signed ratio: >1 means the last 5 minutes are climbing faster than
+        the prior hour (a fresh leg up), negative means a reversal.
+        """
+        if self.price_change_5m is None or not self.price_change_1h:
+            return None
+        return (self.price_change_5m * 12.0) / self.price_change_1h
+
 
 @dataclass
 class CategoryScore:

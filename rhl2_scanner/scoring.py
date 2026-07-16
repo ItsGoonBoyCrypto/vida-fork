@@ -153,6 +153,27 @@ def score_momentum(t: TokenSnapshot, th: Thresholds, weight: float) -> CategoryS
     elif t.volume_accelerating is False:
         parts.append(35.0)
 
+    # Short-term velocity: last-5-min rate vs the trailing 1h rate. This is the
+    # earliest tell — it moves within minutes of launch, before the 24h window
+    # has any history. Weighted heavily so fresh runners surface fast.
+    vv = t.volume_velocity
+    if vv is not None:
+        parts.append(_lerp_up(vv, th.min_volume_velocity - 0.4, th.strong_volume_velocity))
+        if vv >= th.strong_volume_velocity:
+            cs.reasons.append(f"volume surging ({vv:.1f}x)")
+        elif vv >= th.min_volume_velocity:
+            cs.reasons.append(f"volume rising ({vv:.1f}x)")
+        elif vv < 0.6:
+            cs.penalties.append("volume cooling")
+
+    # Fresh buy pressure from the last 5 minutes (reacts before the 1h ratio).
+    br5 = t.buy_ratio_5m
+    if br5 is not None:
+        parts.append(_lerp_up(br5 * 100, th.min_buy_ratio_1h * 100 - 10,
+                              th.strong_buy_ratio_1h * 100 + 15))
+        if br5 >= th.strong_buy_ratio_1h:
+            cs.reasons.append(f"5m buys {br5*100:.0f}%")
+
     # Volume vs mcap turnover
     if t.vol_to_mcap_24h is not None:
         parts.append(_lerp_up(t.vol_to_mcap_24h, 0.1, 1.0))
