@@ -31,21 +31,30 @@ chain:
 
   # --- Bonding-curve launchpads (flap.sh) — EARLIEST catch, pre-graduation ---
   # flap launches onto a bonding curve; a token only hits DexScreener AFTER it
-  # graduates to a DEX (late for a runner). We watch the flap manager contract's
-  # logs to catch launches on the curve. To enable, set the manager address:
-  #     Railway var  RHL2_FLAP_MANAGER = 0x...   (from flap docs "Deployed Contracts")
-  # Leave create_topic blank at first — the listener logs every distinct event
-  # topic0 the manager emits (grep host logs for "curve discovery [flap]") so you
-  # can confirm the real token-creation signature, then pin it via:
-  #     RHL2_FLAP_CREATE_TOPIC = 0x...   and optionally  token_arg: topic1
+  # graduates to a DEX (late for a runner). We watch the flap "Portal" contract's
+  # logs to catch launches on the curve.
+  #   flap contracts on Robinhood Chain:
+  #     Portal (launchpad/curve): 0x26605f322f7fF986f381bB9A6e3f5DAb0bEaEb09
+  #     VaultPortal:              0xe9F7AB7DE8FB8756acbB6a1cd13316a43308197B
+  #     Standard Token Impl:      0x88882688a067FE97E11C2185b996286e53132222
+  #     Tax Token V3 Impl:        0x7777C8743C88B3aff3cf262135beF2c8b2e83333
+  #     Tax Token Helper:         0xb10bD2672aE63735d677164A54B573a016f0203C
+  # create_topic is blank => DISCOVERY mode: the listener logs every distinct
+  # event topic0 the Portal emits (grep host logs for "curve discovery [flap]").
+  # Paste one of those lines back and we pin the real creation signature via
+  # RHL2_FLAP_CREATE_TOPIC + token_arg so tokens decode automatically.
   launchpads:
     - name: flap
-      manager: ""            # env RHL2_FLAP_MANAGER
+      manager: "0x26605f322f7fF986f381bB9A6e3f5DAb0bEaEb09"   # flap Portal
       kind: curve
       create_topic: ""       # env RHL2_FLAP_CREATE_TOPIC (blank => discovery mode)
       graduate_topic: ""     # env RHL2_FLAP_GRADUATE_TOPIC (optional)
       token_arg: topic1      # where the new-token address sits in the create event
       boost: 15              # discovery-score bump for flap-origin tokens
+      # Token implementation templates — flap tokens are clones of these.
+      token_impls:
+        - "0x88882688a067FE97E11C2185b996286e53132222"
+        - "0x7777C8743C88B3aff3cf262135beF2c8b2e83333"
 
   # --- On-chain honeypot sell-sim ---
   # Uniswap V3 SwapRouter02 on Robinhood Chain (exactInputSingle sell-sim).
