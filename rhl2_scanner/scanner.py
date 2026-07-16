@@ -98,6 +98,58 @@ class Scanner:
                 log.exception("send failed")
         print("\n" + text + "\n", flush=True)
 
+    async def inspect(self, ca: str) -> str:
+        """Trace one token through the full live pipeline and return a report.
+
+        Shows discovery, enriched facts, gate results, score, and whether it
+        would alert (gem/early) — so a specific 'missed' token can be diagnosed.
+        """
+        assert self._session is not None
+        dex = DexScreenerClient(self.cfg, session=self._session)
+        pairs = await dex.pairs_for_token(ca)
+        snap = pairs[0] if pairs else TokenSnapshot(
+            chain=self.cfg.chain.dexscreener_chain, pair_address="", token_address=ca)
+        await self._enrich(snap)
+
+        strict = self.cfg.active_tier is RiskTier.MOMENTUM
+        result = score_token(snap, self.cfg, strict_safety=strict,
+                             pragmatic=self.cfg.runtime.live_pragmatic_safety)
+        th = self.cfg.thresholds
+        qs = quick_start_gate(snap, th)
+        s = snap.safety
+        rc = self.cfg.runtime
+        would_early = (
+            rc.early_launch_enabled and not is_stock_token(snap)
+            and snap.age_minutes is not None and snap.age_minutes <= rc.early_launch_max_age_minutes
+            and (snap.liquidity_usd or 0) >= rc.early_launch_min_liquidity_usd
+            and (result.safety_passed or not rc.early_launch_require_safety)
+        )
+        would_gem = result.level.value in ("strong", "watch")
+
+        def yn(v):
+            return "?" if v is None else ("Y" if v else "N")
+
+        lines = [
+            f"=== INSPECT {ca} ===",
+            f"Discovery: {'DexScreener FOUND' if pairs else 'NOT on DexScreener (pre-graduation / unlisted / wrong chain)'}"
+            + (f" — ${snap.symbol} \"{snap.name}\"" if pairs else ""),
+            f"Stock token: {is_stock_token(snap)}",
+            f"Market: price=${snap.price_usd} mcap=${snap.market_cap_usd} liq=${snap.liquidity_usd} "
+            f"age={None if snap.age_minutes is None else round(snap.age_minutes)}m "
+            f"vol1h=${snap.volume_1h} buys/sells1h={snap.buys_1h}/{snap.sells_1h}",
+            f"Distribution: holders={snap.holder_count} top10={snap.top10_supply_pct}% top1={snap.top1_supply_pct}%",
+            f"Safety: verified={yn(s.contract_verified)} mint_revoked={yn(s.mint_authority_revoked)} "
+            f"freeze_revoked={yn(s.freeze_authority_revoked)} lp_burned={yn(s.lp_burned)} lp_locked={yn(s.lp_locked)} "
+            f"honeypot={yn(s.is_honeypot)} buy_tax={s.buy_tax_pct} sell_tax={s.sell_tax_pct} "
+            f"dev={s.dev_holdings_pct}% bundle={s.bundle_supply_pct}% sniper={s.sniper_cluster_pct}%",
+            f"Quick-start gate: {'PASS' if qs.passed else 'FAIL — ' + '; '.join(qs.failures)}",
+            f"Safety gate: {'PASS' if result.safety_passed else 'FAIL — ' + '; '.join(result.gate_failures)}",
+            f"Score: {result.composite:.0f} ({result.level.value}) "
+            f"[{' '.join(f'{c.name[:3]}={c.raw:.0f}' for c in result.categories)}]",
+            f"WOULD ALERT: gem={'YES' if would_gem else 'no'} early={'YES' if would_early else 'no'}",
+        ]
+        return "\n".join(lines)
+
     async def _poll_commands(self) -> None:
         """Receive /zero /unzero /muted from the alert channel and act on them."""
         tg = self.cfg.telegram
@@ -154,6 +206,16 @@ class Scanner:
             lst = self.storage.muted_tokens()
             body = "\n".join(f"<code>{t}</code>" for t in lst) if lst else "none"
             await self._send_html(f"🔇 Muted tokens ({len(lst)}):\n{body}")
+        elif cmd == "inspect":
+            if not valid_ca:
+                await self._send_html("Usage: <code>/inspect 0x&lt;address&gt;</code>")
+                return
+            try:
+                from html import escape as _esc
+                report = await self.inspect(arg)
+                await self._send_html("<pre>" + _esc(report) + "</pre>")
+            except Exception as exc:
+                await self._send_html("inspect failed: " + __import__("html").escape(str(exc)))
 
     async def _poll_wallets(self) -> None:
         if not self.cfg.wallet_watch.enabled or not self.cfg.wallet_watch.wallets:

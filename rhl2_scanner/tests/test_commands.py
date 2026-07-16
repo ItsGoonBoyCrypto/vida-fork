@@ -53,6 +53,15 @@ class TestZeroCommand(unittest.IsolatedAsyncioTestCase):
         finally:
             scanner.storage.close()
 
+    async def test_inspect_bad_ca_no_crash(self):
+        cfg = Config()
+        cfg.runtime.db_path = ":memory:"
+        scanner = Scanner(cfg)
+        try:
+            await scanner._handle_command("/inspect notacontract")  # should not raise
+        finally:
+            scanner.storage.close()
+
     async def test_muted_and_at_suffix(self):
         cfg = Config()
         cfg.runtime.db_path = ":memory:"
