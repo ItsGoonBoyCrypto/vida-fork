@@ -237,9 +237,15 @@ class Scanner:
         import os as _os
         db = self.cfg.runtime.db_path
         persistent = bool(_os.environ.get("RHL2_DB_DIR")) and db not in (":memory:", "scanner.db")
-        state = (f"{len(self.storage.smart_wallets())} smart, "
-                 f"{len(self.storage.blocked_symbols())} blocked, "
-                 f"{len(self.storage.muted_tokens())} muted")
+        # Effective totals = config (always active, repo-baked) + runtime (DB).
+        n_smart = len({w.lower() for w in self.cfg.smart_money_wallets}
+                      | set(self.storage.smart_wallets()))
+        n_blocked = len(self._blocked_symbols())
+        state = (f"{n_smart} smart wallets, {n_blocked} blocked symbols, "
+                 f"{len(self.storage.muted_tokens())} muted "
+                 f"(+{len(self.storage.smart_wallets())} smart / "
+                 f"{len(self.storage.blocked_symbols())} blocked from runtime, "
+                 f"the part the Volume persists)")
         if persistent:
             lines.append(f"DB: {db} — persistent (Volume) · {state}")
         else:
