@@ -146,18 +146,36 @@ telegram:
 #   Seed durably:  RHL2_SMART_WALLETS = 0xabc..,0xdef..   (env survives redeploys)
 #   Auto-grow:     RHL2_SMART_AUTOSEED = 1  (turn on once /diag shows the explorer
 #                  transfer feed works, else it can't read buyers)
-smart_money_wallets: []
+# Proven early-entry wallets — caught cashcat / arrow / tendies early. Seeded
+# so any NEW token they buy scores higher (discovery) and, if also in
+# wallet_watch below, fires a direct "smart money bought X" alert.
+smart_money_wallets:
+  - "0xae6ad7c09668c8c6b2838e0c92b28fb2db891ff7"
+  - "0xbde8bbc336b548357c841b5a5290f553e4ff8809"
+  - "0x0a01b82508f877b8923bae8427a3d60fec5bd707"
+  - "0xc1a3e23049e2f016d61d2a2e4fbb241df20b10d7"
+  - "0xe781b28e02ed5fc4b989905cb6848d318f4735fd"
+  - "0x5638484ba2d2f1d1d35020572b0aa439a9869192"
 
 # Whale / smart-money wallet activity alerts (independent of the gem scan).
 # Fastest to enable: set env RHL2_WATCH_WALLETS=0xabc...,0xdef... in Railway.
+# NOTE: RHL2_WATCH_WALLETS (if set) REPLACES this list — include all six there.
 wallet_watch:
   enabled: true
   wallets:
-    - "0xc1254fc2ccbab582842c27c61664a62bf8679d48"
+    - "0xae6ad7c09668c8c6b2838e0c92b28fb2db891ff7"
+    - "0xbde8bbc336b548357c841b5a5290f553e4ff8809"
+    - "0x0a01b82508f877b8923bae8427a3d60fec5bd707"
+    - "0xc1a3e23049e2f016d61d2a2e4fbb241df20b10d7"
+    - "0xe781b28e02ed5fc4b989905cb6848d318f4735fd"
     - "0x5638484ba2d2f1d1d35020572b0aa439a9869192"
   labels:
-    "0xc1254fc2ccbab582842c27c61664a62bf8679d48": "Whale 1"
-    "0x5638484ba2d2f1d1d35020572b0aa439a9869192": "Whale 2"
+    "0xae6ad7c09668c8c6b2838e0c92b28fb2db891ff7": "Early 1"
+    "0xbde8bbc336b548357c841b5a5290f553e4ff8809": "Early 2"
+    "0x0a01b82508f877b8923bae8427a3d60fec5bd707": "Early 3"
+    "0xc1a3e23049e2f016d61d2a2e4fbb241df20b10d7": "Early 4"
+    "0xe781b28e02ed5fc4b989905cb6848d318f4735fd": "Early 5"
+    "0x5638484ba2d2f1d1d35020572b0aa439a9869192": "Early 6"
   alert_on: "buys_sells"       # alert on both entries and exits
   min_usd: 100                 # ignore transfers below this USD value
   max_transfers_per_wallet: 25

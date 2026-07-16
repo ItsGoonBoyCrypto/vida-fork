@@ -19,6 +19,27 @@ except ImportError:  # pragma: no cover - yaml is a listed dependency
 
 from .models import RiskTier
 
+import logging as _logging
+
+_log = _logging.getLogger("rhl2.config")
+
+
+def _looks_like_address(s: str) -> bool:
+    """True if ``s`` is a 0x-prefixed 20-byte hex address.
+
+    Guards env overrides: a label like 'Uniswap V3 Factory' pasted into
+    RHL2_DEX_FACTORY must NOT be accepted — the RPC rejects it and it silently
+    disables log-based discovery.
+    """
+    s = (s or "").strip()
+    if not s.startswith("0x") or len(s) != 42:
+        return False
+    try:
+        int(s, 16)
+        return True
+    except ValueError:
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Chain / data-source connection
@@ -414,12 +435,20 @@ class Config:
             self.chain.honeypot_simulator_bytecode = v
         # DEX addresses — set as host Variables to enable honeypot sim + pool listener
         # without editing the repo. Grab from robinhoodchain.blockscout.com.
-        if v := env.get("RHL2_WETH_ADDRESS"):
-            self.chain.weth_address = v
-        if v := env.get("RHL2_DEX_FACTORY"):
-            self.chain.dex_factory_address = v
-        if v := env.get("RHL2_DEX_ROUTER"):
-            self.chain.dex_router_address = v
+        # Validate: reject a non-address value (e.g. a pasted label) so it can't
+        # silently break log-based discovery — keep the file/default instead.
+        def _addr_env(name: str, current: str) -> str:
+            v = env.get(name)
+            if not v:
+                return current
+            if _looks_like_address(v):
+                return v.strip()
+            _log.warning("%s=%r is not a 0x address — ignoring, keeping %r",
+                         name, v, current)
+            return current
+        self.chain.weth_address = _addr_env("RHL2_WETH_ADDRESS", self.chain.weth_address)
+        self.chain.dex_factory_address = _addr_env("RHL2_DEX_FACTORY", self.chain.dex_factory_address)
+        self.chain.dex_router_address = _addr_env("RHL2_DEX_ROUTER", self.chain.dex_router_address)
         if v := env.get("RHL2_DEX_FACTORY_KIND"):
             self.chain.dex_factory_kind = v
         if v := env.get("RHL2_DEX_ROUTER_KIND"):
@@ -430,7 +459,10 @@ class Config:
         flap = self._launchpad("flap")
         if flap is not None:
             if v := env.get("RHL2_FLAP_MANAGER"):
-                flap["manager"] = v.strip()
+                if _looks_like_address(v):
+                    flap["manager"] = v.strip()
+                else:
+                    _log.warning("RHL2_FLAP_MANAGER=%r is not a 0x address — ignoring", v)
             if v := env.get("RHL2_FLAP_CREATE_TOPIC"):
                 flap["create_topic"] = v.strip()
             if v := env.get("RHL2_FLAP_GRADUATE_TOPIC"):

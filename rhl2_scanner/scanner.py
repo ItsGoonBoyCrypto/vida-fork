@@ -229,6 +229,10 @@ class Scanner:
         # 3) Factory address — echo the exact value so a bad/empty one is obvious.
         fac = ch.dex_factory_address
         lines.append(f"dex_factory_address = {fac!r}")
+        _is_addr = fac.strip().startswith("0x") and len(fac.strip()) == 42
+        if fac and not _is_addr:
+            lines.append("  ⚠️ that is NOT a 0x address (looks like a label). "
+                         "Set RHL2_DEX_FACTORY=0x… or remove it to use the YAML default.")
         addr_ok = False
         if fac:
             res, err = await _getlogs(fac)
@@ -277,6 +281,35 @@ class Scanner:
         else:
             lines.append("VERDICT: ❌ this RPC doesn't serve eth_getLogs — set RHL2_RPC_URL "
                          "to a dedicated RH Chain RPC that does.")
+        return "\n".join(lines)
+
+    async def research_wallet(self, wallet: str) -> str:
+        """Report what tokens a wallet recently got into — early-entry research.
+
+        Runs on the live host (chain reachable). Lists the wallet's recent ERC-20
+        acquisitions so a proven-early wallet's picks can be studied, and flags
+        whether it's already in the smart-money set / watch list.
+        """
+        assert self._session is not None
+        smart = SmartMoneyClient(self.cfg, session=self._session)
+        acqs = await smart.wallet_acquisitions(wallet, limit=30)
+        w = wallet.lower()
+        in_smart = w in {x.lower() for x in self.cfg.smart_money_wallets}
+        in_watch = w in {x.lower() for x in (self.cfg.wallet_watch.wallets or [])}
+        lines = [
+            f"=== WALLET {wallet} ===",
+            f"smart-money set: {'YES' if in_smart else 'no'} | "
+            f"watch list: {'YES' if in_watch else 'no'}",
+            f"recent token acquisitions: {len(acqs)}",
+        ]
+        if not acqs:
+            lines.append("(none found — explorer transfer feed empty or unsupported)")
+        for a in acqs[:25]:
+            ts = str(a.get("ts") or "")[:19].replace("T", " ")
+            lines.append(f"  ${a['symbol']:<10} {a['token']}  {ts}")
+        if acqs:
+            lines.append("")
+            lines.append("Tip: /inspect any of these CAs to see how they score now.")
         return "\n".join(lines)
 
     async def _poll_commands(self) -> None:
@@ -367,6 +400,16 @@ class Scanner:
             if arg in self.cfg.smart_money_wallets:
                 self.cfg.smart_money_wallets.remove(arg)
             await self._send_html(f"🧠 Removed <code>{arg}</code>.")
+        elif cmd == "wallet":
+            if not valid_ca:
+                await self._send_html("Usage: <code>/wallet 0x&lt;address&gt;</code>")
+                return
+            try:
+                from html import escape as _esc
+                report = await self.research_wallet(arg)
+                await self._send_html("<pre>" + _esc(report) + "</pre>")
+            except Exception as exc:
+                await self._send_html("wallet research failed: " + __import__("html").escape(str(exc)))
         elif cmd in ("smartlist", "smarts"):
             rows = self.storage.smart_wallets_detailed()
             if not rows:

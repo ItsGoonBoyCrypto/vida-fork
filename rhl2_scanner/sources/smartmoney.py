@@ -141,6 +141,49 @@ class SmartMoneyClient:
             snap.smart_money_wallets = sorted(seen)
         return snap.smart_money_wallets
 
+    async def wallet_acquisitions(self, wallet: str, limit: int = 40) -> list[dict]:
+        """Recent tokens a wallet ACQUIRED (incoming ERC-20 transfers).
+
+        Returns newest-first dicts {token, symbol, name, ts} deduped to the
+        wallet's *first* acquisition of each token in the window. Used by the
+        /wallet research command to see what a proven-early wallet got into.
+        Blockscout v2 only (RH Chain's explorer); empty elsewhere.
+        """
+        base = self._v2_base()
+        if not base:
+            return []
+        w = wallet.lower()
+        params: dict[str, Any] = {"type": "ERC-20", "filter": "to"}
+        acquisitions: dict[str, dict] = {}
+        for _ in range(3):  # up to 3 pages
+            data = await self._get(f"{base}/addresses/{wallet}/token-transfers", params)
+            if not isinstance(data, dict):
+                break
+            items = data.get("items")
+            if not isinstance(items, list):
+                break
+            for tx in items:
+                to = tx.get("to")
+                to_addr = (to.get("hash") if isinstance(to, dict) else to) or ""
+                if to_addr.lower() != w:
+                    continue
+                tok = tx.get("token") or {}
+                addr = (tok.get("address") or tok.get("address_hash") or "").lower()
+                if not addr:
+                    continue
+                # keep the earliest seen (feed is newest-first, so overwrite)
+                acquisitions[addr] = {
+                    "token": addr,
+                    "symbol": tok.get("symbol") or "?",
+                    "name": tok.get("name") or "",
+                    "ts": tx.get("timestamp") or "",
+                }
+            nxt = data.get("next_page_params")
+            if not nxt or len(acquisitions) >= limit:
+                break
+            params = {**params, **nxt}
+        return list(acquisitions.values())[:limit]
+
     async def early_buyers(self, token: str, n: int) -> list[str]:
         """First ``n`` distinct non-infra receivers of ``token`` (earliest first).
 
