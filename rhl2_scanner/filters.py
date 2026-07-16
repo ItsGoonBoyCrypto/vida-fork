@@ -35,6 +35,33 @@ def is_stock_token(t: TokenSnapshot) -> bool:
     return any(m in name for m in _STOCK_NAME_MARKERS)
 
 
+def _norm_symbol(s: str) -> str:
+    """Uppercase, strip a leading $, drop non-alphanumerics ($ROBIN-HOOD -> ROBINHOOD)."""
+    s = (s or "").strip().lstrip("$")
+    return "".join(ch for ch in s if ch.isalnum()).upper()
+
+
+def is_blocked_symbol(t: TokenSnapshot, blocked: list[str]) -> bool:
+    """True if the token's symbol (or name) matches a blocked scam-impersonator.
+
+    Matches the normalised symbol exactly, and also catches the symbol appearing
+    as a standalone word in the name — so fake ``$ROBINHOOD`` clones are dropped
+    regardless of how they dress up the name.
+    """
+    if not blocked:
+        return False
+    wanted = {_norm_symbol(b) for b in blocked if b}
+    if not wanted:
+        return False
+    if _norm_symbol(t.symbol) in wanted:
+        return True
+    # Also block when the name reduces to exactly a blocked token (e.g. name
+    # "ROBINHOOD" with a different ticker used to sneak past a symbol check).
+    if _norm_symbol(t.name) in wanted:
+        return True
+    return False
+
+
 def quick_start_gate(t: TokenSnapshot, th: Thresholds) -> GateResult:
     """Cheap pre-screen using only DexScreener-level data (§6 filter stack).
 

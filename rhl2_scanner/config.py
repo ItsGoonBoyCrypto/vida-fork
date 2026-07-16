@@ -69,6 +69,11 @@ class ChainConfig:
     # RH Chain mixes tokenized STOCKS (MU/TSLA/SPCX/… named "• Robinhood Token")
     # with memecoins. Skip the equities — they're not gems.
     exclude_stock_tokens: bool = True
+    # Scam-impersonator symbols to drop from ALL alerts, matched on symbol/name
+    # (case-insensitive, non-alphanumerics ignored). RH Chain is flooded with
+    # fake "$ROBINHOOD" tokens. Add more with /block <SYMBOL> at runtime or via
+    # RHL2_BLOCKED_SYMBOLS=ROBINHOOD,FOO. Compared after stripping a leading $.
+    blocked_symbols: list[str] = field(default_factory=lambda: ["ROBINHOOD"])
     weth_address: str = ""                             # wrapped-native for pair/router math
     # Addresses excluded from holder-distribution math (LP pools, burn, locker)
     excluded_holder_addresses: list[str] = field(default_factory=list)
@@ -487,6 +492,12 @@ class Config:
             self.smart_money_wallets = merged
         if v := env.get("RHL2_SMART_AUTOSEED"):
             self.runtime.smart_money_autoseed = v.lower() in ("1", "true", "yes")
+        # Extra scam symbols to block, comma-separated (unioned with the default
+        # ROBINHOOD so it's always blocked).
+        if v := env.get("RHL2_BLOCKED_SYMBOLS"):
+            extra = [s.strip().upper() for s in v.split(",") if s.strip()]
+            self.chain.blocked_symbols = list(dict.fromkeys(
+                [s.upper() for s in self.chain.blocked_symbols] + extra))
         if v := env.get("TELEGRAM_BOT_TOKEN"):
             self.telegram.bot_token = v
         if v := env.get("TELEGRAM_ALERT_CHAT_ID"):

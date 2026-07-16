@@ -82,6 +82,11 @@ CREATE TABLE IF NOT EXISTS smart_wallets (
     source  TEXT,               -- "manual" | "auto:<token>" (harvested from a winner)
     note    TEXT
 );
+
+CREATE TABLE IF NOT EXISTS blocked_symbols (
+    symbol  TEXT PRIMARY KEY,   -- normalised (uppercase, alnum) blocked ticker
+    ts      REAL NOT NULL
+);
 """
 
 
@@ -324,6 +329,23 @@ class Storage:
         cur = self._conn.execute(
             "SELECT wallet, source, note, ts FROM smart_wallets ORDER BY ts DESC")
         return cur.fetchall()
+
+    # -- blocked scam symbols (/block) ----------------------------------
+
+    def block_symbol(self, symbol: str) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO blocked_symbols (symbol, ts) VALUES (?, ?)",
+            (symbol.upper(), time.time()),
+        )
+        self._conn.commit()
+
+    def unblock_symbol(self, symbol: str) -> None:
+        self._conn.execute("DELETE FROM blocked_symbols WHERE symbol = ?", (symbol.upper(),))
+        self._conn.commit()
+
+    def blocked_symbols(self) -> list[str]:
+        cur = self._conn.execute("SELECT symbol FROM blocked_symbols ORDER BY symbol")
+        return [r["symbol"] for r in cur.fetchall()]
 
     def kv_get(self, key: str) -> Optional[str]:
         cur = self._conn.execute("SELECT v FROM kv WHERE k = ?", (key,))

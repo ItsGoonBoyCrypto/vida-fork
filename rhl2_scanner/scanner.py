@@ -23,7 +23,7 @@ import aiohttp
 
 from .bundle import BundleAnalyzer
 from .config import Config
-from .filters import is_stock_token, quick_start_gate, safety_gate
+from .filters import is_blocked_symbol, is_stock_token, quick_start_gate, safety_gate
 from .models import AlertLevel, RiskTier, ScoreResult, TokenSnapshot
 from .paper import PaperTrader
 from .scoring import score_token
@@ -188,7 +188,8 @@ class Scanner:
             f"=== INSPECT {ca} ===",
             f"Discovery: {'DexScreener FOUND' if pairs else 'NOT on DexScreener (pre-graduation / unlisted / wrong chain)'}"
             + (f" — ${snap.symbol} \"{snap.name}\"" if pairs else ""),
-            f"Stock token: {is_stock_token(snap)}",
+            f"Stock token: {is_stock_token(snap)} | Blocked symbol: "
+            f"{is_blocked_symbol(snap, self._blocked_symbols())}",
             f"Market: price=${snap.price_usd} mcap=${snap.market_cap_usd} liq=${snap.liquidity_usd} "
             f"age={None if snap.age_minutes is None else round(snap.age_minutes)}m "
             f"vol1h=${snap.volume_1h} buys/sells1h={snap.buys_1h}/{snap.sells_1h}",
@@ -579,6 +580,29 @@ class Scanner:
             if arg in self.cfg.smart_money_wallets:
                 self.cfg.smart_money_wallets.remove(arg)
             await self._send_html(f"🧠 Removed <code>{arg}</code>.")
+        elif cmd == "block":
+            from .filters import _norm_symbol
+            sym = _norm_symbol(parts[1]) if len(parts) > 1 else ""
+            if not sym:
+                await self._send_html("Usage: <code>/block SYMBOL</code> (e.g. /block ROBINHOOD)")
+                return
+            self.storage.block_symbol(sym)
+            await self._send_html(f"🚫 Blocked <b>${sym}</b> — these will no longer alert.")
+        elif cmd in ("unblock", "unblocksymbol"):
+            from .filters import _norm_symbol
+            sym = _norm_symbol(parts[1]) if len(parts) > 1 else ""
+            if not sym:
+                await self._send_html("Usage: <code>/unblock SYMBOL</code>")
+                return
+            # Only DB-added symbols can be removed; config defaults stay.
+            self.storage.unblock_symbol(sym)
+            still = sym in [s.upper() for s in (self.cfg.chain.blocked_symbols or [])]
+            note = " (still blocked by config default)" if still else ""
+            await self._send_html(f"✅ Unblocked <b>${sym}</b>{note}.")
+        elif cmd in ("blocked", "blocklist"):
+            syms = self._blocked_symbols()
+            body = ", ".join(f"${s}" for s in syms) if syms else "none"
+            await self._send_html(f"🚫 Blocked symbols ({len(syms)}): {body}")
         elif cmd == "calibrate":
             cas = [p.lower() for p in parts[1:] if p.lower().startswith("0x") and len(p) == 42]
             if not cas:
@@ -731,6 +755,15 @@ class Scanner:
             if before != len(pairs):
                 log.info("excluded %d tokenized stocks", before - len(pairs))
 
+        # Drop scam-impersonator symbols ($ROBINHOOD clones etc.).
+        blocked = self._blocked_symbols()
+        if blocked:
+            before = len(pairs)
+            pairs = [p for p in pairs if not is_blocked_symbol(p, blocked)]
+            if before != len(pairs):
+                log.info("excluded %d blocked-symbol tokens (%s)",
+                         before - len(pairs), ", ".join(blocked))
+
         th = self.cfg.thresholds
         candidates = [p for p in pairs if quick_start_gate(p, th).passed]
         log.info("%d passed quick-start gate", len(candidates))
@@ -812,6 +845,8 @@ class Scanner:
 
         if self.storage.is_muted(snap.token_address):
             return result   # /zero'd — suppress all alerts for this token
+        if is_blocked_symbol(snap, self._blocked_symbols()):
+            return result   # scam-impersonator symbol ($ROBINHOOD clones) — never alert
 
         # Determine this cycle's alert tier: strong(2) > watch(1) > early(0).
         # A token that ESCALATES past the tier it was last alerted at gets an
@@ -861,6 +896,13 @@ class Scanner:
         return f"🔼 <b>UPGRADED</b> {names.get(prev, '?')} → {names.get(tier, '?')}"
 
     # -- smart-money seeding --------------------------------------------
+
+    def _blocked_symbols(self) -> list[str]:
+        """Config blocklist + any /block'd symbols persisted this deploy."""
+        from .filters import _norm_symbol
+        cfg_syms = [_norm_symbol(s) for s in (self.cfg.chain.blocked_symbols or [])]
+        db_syms = self.storage.blocked_symbols()
+        return list(dict.fromkeys([s for s in cfg_syms + db_syms if s]))
 
     def _merge_persisted_smart_wallets(self) -> None:
         persisted = self.storage.smart_wallets()
