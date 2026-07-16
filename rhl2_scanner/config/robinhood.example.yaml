@@ -210,6 +210,8 @@ wallet_watch:
   wallet_groups:
     "0x8e65cbcdc822968131b1e37e5cee02c9ce82ab21": "Early 10/13"
     "0x3b1f57028e5bc1f28c7201b1f6bd913e46b64e62": "Early 10/13"
+    "0xe781b28e02ed5fc4b989905cb6848d318f4735fd": "Early 5/6"
+    "0x5638484ba2d2f1d1d35020572b0aa439a9869192": "Early 5/6"
   # No individual "🐋 whale bought X" pings — instead their buys feed the
   # smart-money cluster signal + gem scoring. Cluster convergence alerts stay on.
   # Flip back on with RHL2_WHALE_ALERTS=1 if you want the per-buy pings again.
