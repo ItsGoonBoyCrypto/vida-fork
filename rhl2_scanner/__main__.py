@@ -78,6 +78,20 @@ async def _inspect(cfg: Config, ca: str) -> None:
         scanner.storage.close()
 
 
+async def _diag(cfg: Config) -> None:
+    import aiohttp
+    from .scanner import Scanner
+
+    scanner = Scanner(cfg)
+    scanner._session = aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=cfg.runtime.request_timeout_seconds))
+    try:
+        print(await scanner.diag())
+    finally:
+        await scanner._session.close()
+        scanner.storage.close()
+
+
 async def _tg(cfg: Config, command: str) -> None:
     """Verify Telegram wiring: send a test alert and/or discover chat ids."""
     from .tgtools import discover_chats, get_bot_username, send_message
@@ -169,7 +183,7 @@ def main(argv=None) -> int:
     parser.add_argument(
         "command",
         choices=["run", "scan-once", "paper", "paper-report", "paper-digest",
-                 "backtest", "selfcheck", "tg-test", "tg-chats", "inspect"],
+                 "backtest", "selfcheck", "tg-test", "tg-chats", "inspect", "diag"],
     )
     parser.add_argument("dataset", nargs="?", help="JSONL file for backtest")
     parser.add_argument("--config", default="config/config.yaml")
@@ -217,6 +231,8 @@ def main(argv=None) -> int:
             print("inspect requires a token address: inspect 0x...", file=sys.stderr)
             return 2
         asyncio.run(_inspect(cfg, args.dataset))
+    elif args.command == "diag":
+        asyncio.run(_diag(cfg))
     elif args.command == "selfcheck":
         _selfcheck(cfg)
     elif args.command == "backtest":

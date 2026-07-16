@@ -62,6 +62,21 @@ class TestZeroCommand(unittest.IsolatedAsyncioTestCase):
         finally:
             scanner.storage.close()
 
+    async def test_diag_no_rpc(self):
+        import aiohttp
+        cfg = Config()
+        cfg.runtime.db_path = ":memory:"
+        cfg.chain.rpc_url = ""              # no RPC -> early, no network
+        scanner = Scanner(cfg)
+        scanner._session = aiohttp.ClientSession()
+        try:
+            report = await scanner.diag()
+            self.assertIn("RPC DIAG", report)
+            self.assertIn("not set", report)
+        finally:
+            await scanner._session.close()
+            scanner.storage.close()
+
     async def test_muted_and_at_suffix(self):
         cfg = Config()
         cfg.runtime.db_path = ":memory:"

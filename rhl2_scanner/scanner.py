@@ -154,6 +154,91 @@ class Scanner:
         ]
         return "\n".join(lines)
 
+    async def diag(self) -> str:
+        """Probe the configured RPC and report whether log-based discovery works.
+
+        The block-zero pool listener + flap curve listener both rely on
+        ``eth_getLogs``. Many public RPCs reject it (rate/range limits or
+        "method not supported"), which silently disables the earliest-catch
+        streams. This runs on the live host (Railway has open internet) and
+        gives a plain verdict + the exact error, so we know whether a dedicated
+        RPC (RHL2_RPC_URL) is needed.
+        """
+        assert self._session is not None
+        ch = self.cfg.chain
+        rpc = ch.rpc_url or ""
+        host = rpc.split("://")[-1].split("/")[0] if rpc else "(unset)"
+        lines = [f"=== RPC DIAG ===", f"RPC host: {host}"]
+        if not rpc:
+            return "\n".join(lines + ["RPC url is not set — set RHL2_RPC_URL."])
+
+        async def _rpc(method, params):
+            payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+            try:
+                async with self._session.post(rpc, json=payload) as r:
+                    if r.status != 200:
+                        return None, f"HTTP {r.status}"
+                    data = await r.json()
+                    if isinstance(data, dict) and data.get("error"):
+                        return None, str(data["error"])
+                    return data.get("result"), None
+            except Exception as exc:  # noqa: BLE001 — report any failure verbatim
+                return None, f"{type(exc).__name__}: {exc}"
+
+        # 1) reachability + chain id
+        cid, err = await _rpc("eth_chainId", [])
+        if err:
+            return "\n".join(lines + [f"eth_chainId: ERROR {err}",
+                                      "RPC unreachable — check RHL2_RPC_URL."])
+        try:
+            cid_dec = int(cid, 16)
+        except (TypeError, ValueError):
+            cid_dec = cid
+        lines.append(f"eth_chainId: {cid_dec} (expected {ch.chain_id})")
+
+        head, err = await _rpc("eth_blockNumber", [])
+        if err:
+            return "\n".join(lines + [f"eth_blockNumber: ERROR {err}"])
+        head_n = int(head, 16)
+        lines.append(f"eth_blockNumber: {head_n}")
+
+        # 2) eth_getLogs over a small recent range on the DEX factory
+        frm = max(0, head_n - 50)
+        getlogs_ok = False
+        if ch.dex_factory_address:
+            res, err = await _rpc("eth_getLogs", [{
+                "fromBlock": hex(frm), "toBlock": hex(head_n),
+                "address": ch.dex_factory_address}])
+            if err:
+                lines.append(f"eth_getLogs (factory, {frm}-{head_n}): ❌ REJECTED — {err}")
+            else:
+                getlogs_ok = True
+                lines.append(f"eth_getLogs (factory, {frm}-{head_n}): ✅ ok, {len(res)} logs")
+        else:
+            lines.append("eth_getLogs (factory): skipped — dex_factory_address unset")
+
+        # 3) eth_getLogs on each configured curve launchpad (flap)
+        for lp in self.cfg.configured_launchpads():
+            res, err = await _rpc("eth_getLogs", [{
+                "fromBlock": hex(frm), "toBlock": hex(head_n),
+                "address": lp["manager"]}])
+            name = lp.get("name", "launchpad")
+            if err:
+                lines.append(f"eth_getLogs ({name}): ❌ REJECTED — {err}")
+            else:
+                lines.append(f"eth_getLogs ({name}): ✅ ok, {len(res)} logs")
+        if not self.cfg.configured_launchpads():
+            lines.append("curve launchpads: none configured (set RHL2_FLAP_MANAGER)")
+
+        lines.append("")
+        if getlogs_ok:
+            lines.append("VERDICT: ✅ log-based discovery works on this RPC.")
+        else:
+            lines.append("VERDICT: ❌ eth_getLogs unavailable — earliest-catch "
+                         "(pool + curve listeners) is disabled. Set RHL2_RPC_URL "
+                         "to a dedicated RH Chain RPC that supports eth_getLogs.")
+        return "\n".join(lines)
+
     async def _poll_commands(self) -> None:
         """Receive /zero /unzero /muted from the alert channel and act on them."""
         tg = self.cfg.telegram
@@ -219,6 +304,13 @@ class Scanner:
                 await self._send_html("<pre>" + _esc(report) + "</pre>")
             except Exception as exc:
                 await self._send_html("inspect failed: " + __import__("html").escape(str(exc)))
+        elif cmd == "diag":
+            try:
+                from html import escape as _esc
+                report = await self.diag()
+                await self._send_html("<pre>" + _esc(report) + "</pre>")
+            except Exception as exc:
+                await self._send_html("diag failed: " + __import__("html").escape(str(exc)))
 
     async def _poll_wallets(self) -> None:
         if not self.cfg.wallet_watch.enabled or not self.cfg.wallet_watch.wallets:
