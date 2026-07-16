@@ -111,6 +111,16 @@ CREATE TABLE IF NOT EXISTS pos_events (
     key  TEXT PRIMARY KEY,      -- one-shot follow-up alert key (token|kind[|wallet])
     ts   REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS harvest_candidates (
+    token        TEXT PRIMARY KEY,   -- lowercased token; every discovered priced token
+    pair         TEXT,
+    symbol       TEXT,
+    entry_price  REAL NOT NULL,      -- price at first discovery
+    entry_ts     REAL NOT NULL,
+    done         INTEGER DEFAULT 0   -- 1 once the retroactive sweep has processed it
+);
+CREATE INDEX IF NOT EXISTS idx_harvest_due ON harvest_candidates(done, entry_ts);
 """
 
 
@@ -443,6 +453,34 @@ class Storage:
         cur = self._conn.execute(
             "SELECT 1 FROM smart_buys WHERE token = ? LIMIT 1", (token.lower(),))
         return cur.fetchone() is not None
+
+    # -- retroactive winner harvest -------------------------------------
+
+    def add_harvest_candidate(self, token: str, pair: str, symbol: str,
+                              price: float) -> None:
+        """Record a discovered priced token once (entry = first-seen price)."""
+        self._conn.execute(
+            "INSERT OR IGNORE INTO harvest_candidates "
+            "(token, pair, symbol, entry_price, entry_ts) VALUES (?, ?, ?, ?, ?)",
+            (token.lower(), (pair or "").lower(), symbol, price, time.time()),
+        )
+        self._conn.commit()
+
+    def due_harvest_candidates(self, min_age_s: float, max_age_s: float,
+                               limit: int) -> list[sqlite3.Row]:
+        """Unprocessed candidates whose age is in [min_age, max_age] seconds."""
+        now = time.time()
+        cur = self._conn.execute(
+            "SELECT * FROM harvest_candidates WHERE done = 0 "
+            "AND entry_ts <= ? AND entry_ts >= ? ORDER BY entry_ts LIMIT ?",
+            (now - min_age_s, now - max_age_s, limit),
+        )
+        return cur.fetchall()
+
+    def mark_harvest_done(self, token: str) -> None:
+        self._conn.execute(
+            "UPDATE harvest_candidates SET done = 1 WHERE token = ?", (token.lower(),))
+        self._conn.commit()
 
     # -- activity snapshot (/stats) -------------------------------------
 

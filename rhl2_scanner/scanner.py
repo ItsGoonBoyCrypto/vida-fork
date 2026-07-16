@@ -123,6 +123,7 @@ class Scanner:
         self.perf = (PaperTrader(cfg, self.storage)
                      if (not cfg.runtime.paper_mode and not cfg.runtime.dry_run) else None)
         self._last_digest_ts: Optional[float] = None
+        self._last_harvest_ts: Optional[float] = None
         self._wallet_watcher = None  # bound to the shared session in run_once
         self._cmd_offset = None      # Telegram getUpdates offset (loaded from db)
         # Merge any persisted smart-money wallets (from prior /smart or autoseed)
@@ -380,9 +381,12 @@ class Scanner:
         auto = "ON" if rc.smart_money_autoseed else "off"
         n_auto = sum(1 for r in self.storage.smart_wallets_detailed()
                      if (r["source"] or "").startswith("auto:"))
+        wh = "ON" if rc.winner_harvest_enabled else "off"
         lines.append(
             f"autoseed: {auto} (harvest {rc.smart_money_autoseed_buyers} buyers/winner, "
             f"cap {rc.smart_money_max_set}, {n_auto} harvested so far) | "
+            f"winner-harvest: {wh} (≥{rc.winner_harvest_win_mult:g}x at "
+            f"{rc.winner_harvest_min_age_hours:g}-{rc.winner_harvest_max_age_hours:g}h) | "
             f"cluster: {'on' if rc.smart_cluster_enabled else 'off'} "
             f"(≥{rc.smart_cluster_min_wallets} in {rc.smart_cluster_window_hours:g}h) | "
             f"whale pings: {'on' if self.cfg.wallet_watch.emit_alerts else 'off'}")
@@ -1088,6 +1092,15 @@ class Scanner:
                 log.info("excluded %d blocked-symbol tokens (%s)",
                          before - len(pairs), ", ".join(blocked))
 
+        # Record every discovered priced token for the retroactive winner
+        # harvest — BEFORE the quick-start gate, so we also learn from winners
+        # that we filter out now (their early buyers are the real prize).
+        if self.cfg.runtime.winner_harvest_enabled:
+            for p in pairs:
+                if p.price_usd and p.pair_address:
+                    self.storage.add_harvest_candidate(
+                        p.token_address, p.pair_address, p.symbol, p.price_usd)
+
         th = self.cfg.thresholds
         candidates = [p for p in pairs if quick_start_gate(p, th).passed]
         log.info("%d passed quick-start gate", len(candidates))
@@ -1149,6 +1162,18 @@ class Scanner:
             await self._monitor_positions(dex)
         except Exception:
             log.exception("position monitor failed")
+
+        # Retroactive winner harvest — periodic sweep (not every cycle).
+        rc = self.cfg.runtime
+        if rc.winner_harvest_enabled:
+            now = time.time()
+            interval = max(0.1, rc.winner_harvest_interval_hours) * 3600.0
+            if self._last_harvest_ts is None or (now - self._last_harvest_ts) >= interval:
+                self._last_harvest_ts = now
+                try:
+                    await self._harvest_winners(dex)
+                except Exception:
+                    log.exception("winner harvest failed")
 
         return [r for r in results if isinstance(r, ScoreResult)]
 
@@ -1261,24 +1286,80 @@ class Scanner:
         smart_money_autoseed and capped by smart_money_max_set.
         """
         rc = self.cfg.runtime
-        if not rc.smart_money_autoseed or self._session is None:
+        if not rc.smart_money_autoseed:
             return
+        added = await self._harvest_buyers(snap.token_address, snap.symbol,
+                                           source_prefix="auto")
+        if added:
+            log.info("autoseed: harvested %d early buyers of $%s (winner)", added, snap.symbol)
+
+    async def _harvest_buyers(self, token: str, symbol: str, source_prefix: str) -> int:
+        """Add a winner's earliest buyers to the smart set. Returns count added."""
+        rc = self.cfg.runtime
+        if self._session is None:
+            return 0
         if len(self.storage.smart_wallets()) >= rc.smart_money_max_set:
-            return
+            return 0
         try:
             smart = SmartMoneyClient(self.cfg, session=self._session)
-            buyers = await smart.early_buyers(snap.token_address, rc.smart_money_autoseed_buyers)
+            buyers = await smart.early_buyers(token, rc.smart_money_autoseed_buyers)
         except Exception:
-            log.debug("autoseed early_buyers failed", exc_info=True)
-            return
+            log.debug("early_buyers failed", exc_info=True)
+            return 0
         added = 0
         for w in buyers:
-            if self._add_smart_wallet(w, source=f"auto:{snap.token_address.lower()}",
-                                      note=f"${snap.symbol}"):
+            if self._add_smart_wallet(w, source=f"{source_prefix}:{token.lower()}",
+                                      note=f"${symbol}"):
                 added += 1
-        if added:
-            log.info("autoseed: harvested %d early buyers of $%s (winner) into smart set",
-                     added, snap.symbol)
+        return added
+
+    async def _harvest_winners(self, dex) -> None:
+        """Retroactive sweep: harvest early buyers of tokens that ran >= win_mult.
+
+        Learns from winners we NEVER alerted on. Runs periodically (not every
+        cycle); re-prices a capped batch of candidates aged 24-36h and harvests
+        the ones that peaked past the win multiple, then marks them processed.
+        """
+        rc = self.cfg.runtime
+        if not rc.winner_harvest_enabled:
+            return
+        due = self.storage.due_harvest_candidates(
+            rc.winner_harvest_min_age_hours * 3600.0,
+            rc.winner_harvest_max_age_hours * 3600.0,
+            rc.winner_harvest_batch)
+        if not due:
+            return
+        winners = 0
+        for row in due:
+            token, pair, entry = row["token"], row["pair"], row["entry_price"]
+            self.storage.mark_harvest_done(token)   # process once regardless
+            if not entry:
+                continue
+            try:
+                price = await self._price_now(dex, pair, token)
+            except Exception:
+                price = None
+            if price is None or price <= 0:
+                continue
+            if price / entry >= rc.winner_harvest_win_mult:
+                added = await self._harvest_buyers(token, row["symbol"] or "?",
+                                                   source_prefix="winner")
+                winners += 1
+                log.info("winner-harvest: $%s ran %.1fx — harvested %d early buyers",
+                         row["symbol"], price / entry, added)
+        if winners:
+            log.info("winner-harvest swept %d candidates, %d winners", len(due), winners)
+
+    async def _price_now(self, dex, pair: str, token: str):
+        stub = TokenSnapshot(chain=self.cfg.chain.dexscreener_chain,
+                             pair_address=pair or "", token_address=token)
+        refreshed = await dex.refresh(stub)
+        if refreshed.price_usd is not None:
+            return refreshed.price_usd
+        for p in await dex.pairs_for_token(token):
+            if p.price_usd is not None:
+                return p.price_usd
+        return None
 
     def _is_early_launch(self, snap: TokenSnapshot, result: ScoreResult) -> bool:
         """A fresh, SAFE launch worth an early-entry ping even below the score band.

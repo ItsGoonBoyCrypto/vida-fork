@@ -302,6 +302,19 @@ class RuntimeConfig:
     smart_money_autoseed_buyers: int = 12      # earliest buyers to harvest per winner
     smart_money_max_set: int = 500             # cap the auto-grown set
 
+    # --- Retroactive winner harvest ---
+    # Record every discovered token, then a periodic sweep re-prices those aged
+    # winner_harvest_min..max_hours and, for any that ran >= win_mult from our
+    # discovery price, harvests its earliest buyers into the smart set. Unlike
+    # real-time autoseed this ALSO learns from winners we never alerted on — the
+    # 24-36h delay confirms a real runner, not a fakeout. Opt-in: RHL2_WINNER_HARVEST=1
+    winner_harvest_enabled: bool = False
+    winner_harvest_min_age_hours: float = 24.0
+    winner_harvest_max_age_hours: float = 36.0
+    winner_harvest_win_mult: float = 3.0       # peak from discovery to count as a winner
+    winner_harvest_batch: int = 20             # tokens re-priced per sweep (rate-limit guard)
+    winner_harvest_interval_hours: float = 1.0
+
     # --- Smart-money CLUSTER alert ---
     # When this many DISTINCT smart-money wallets buy the same token within the
     # window, fire a high-priority "cluster" alert — convergence of proven early
@@ -525,6 +538,8 @@ class Config:
             self.smart_money_wallets = merged
         if v := env.get("RHL2_SMART_AUTOSEED"):
             self.runtime.smart_money_autoseed = v.lower() in ("1", "true", "yes")
+        if v := env.get("RHL2_WINNER_HARVEST"):
+            self.runtime.winner_harvest_enabled = v.lower() in ("1", "true", "yes")
         # Extra scam symbols to block, comma-separated (unioned with the default
         # ROBINHOOD so it's always blocked).
         if v := env.get("RHL2_BLOCKED_SYMBOLS"):
