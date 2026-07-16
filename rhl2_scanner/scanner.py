@@ -346,6 +346,18 @@ class Scanner:
         if not self.cfg.configured_launchpads():
             lines.append("curve launchpads: none configured (set RHL2_FLAP_MANAGER)")
 
+        # Feature status so config toggles can be confirmed at a glance.
+        rc = self.cfg.runtime
+        auto = "ON" if rc.smart_money_autoseed else "off"
+        n_auto = sum(1 for r in self.storage.smart_wallets_detailed()
+                     if (r["source"] or "").startswith("auto:"))
+        lines.append(
+            f"autoseed: {auto} (harvest {rc.smart_money_autoseed_buyers} buyers/winner, "
+            f"cap {rc.smart_money_max_set}, {n_auto} harvested so far) | "
+            f"cluster: {'on' if rc.smart_cluster_enabled else 'off'} "
+            f"(≥{rc.smart_cluster_min_wallets} in {rc.smart_cluster_window_hours:g}h) | "
+            f"whale pings: {'on' if self.cfg.wallet_watch.emit_alerts else 'off'}")
+
         lines.append("")
         if method_ok and addr_ok:
             lines.append("VERDICT: ✅ log-based discovery works — listeners are live.")
