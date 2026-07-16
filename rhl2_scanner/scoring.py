@@ -210,6 +210,21 @@ def score_discovery(t: TokenSnapshot, th: Thresholds, weight: float) -> Category
     if t.age_minutes is not None:
         pts += 25 * (_lerp_down(t.age_minutes, 0.0, th.max_age_minutes) / 100.0)
 
+    # Known launchpad origin (e.g. flap.sh) — a recognised launchpad is a mild
+    # positive (curated deploy, standard LP handling) and lets alerts label it.
+    if t.launchpad:
+        pts += 15
+        cs.reasons.append(f"via {t.launchpad}")
+
+    # Bonding-curve tokens caught pre-graduation are the earliest possible entry.
+    # Reward the sweet spot: enough traction to be real, not yet graduated.
+    if t.curve_progress_pct is not None:
+        if 20.0 <= t.curve_progress_pct < 100.0:
+            pts += 12
+            cs.reasons.append(f"curve {t.curve_progress_pct:.0f}% (pre-grad)")
+        elif t.curve_progress_pct < 20.0:
+            pts += 4  # very fresh, unproven
+
     # Smart money
     n_smart = len(t.smart_money_wallets)
     if n_smart:

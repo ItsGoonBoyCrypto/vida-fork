@@ -85,6 +85,13 @@ def build_lines(snap: TokenSnapshot, result: ScoreResult) -> list[str]:
         f"{header} - Score: {result.composite:.0f}/100",
         f"Token: ${snap.symbol or '???'}",
         f"CA: {snap.token_address}",
+    ]
+    if snap.launchpad:
+        origin = f"Launchpad: {snap.launchpad}"
+        if snap.curve_progress_pct is not None:
+            origin += f" | Curve: {snap.curve_progress_pct:.0f}% (pre-grad)"
+        lines.append(origin)
+    lines += [
         f"Age: {_age(snap.age_minutes)} | MCAP: {_usd(snap.market_cap_usd)} | Liq: {_usd(snap.liquidity_usd)}",
         f"Holders: {holders}{growing} | Top10: {_pct(snap.top10_supply_pct)}",
         f"Volume 1h: {_usd(snap.volume_1h)}{accel} | Buy Ratio: {buy_ratio}",
@@ -133,8 +140,11 @@ def format_early_launch_html(snap: TokenSnapshot, result: ScoreResult) -> str:
         safety_bits.append(f"dev {s.dev_holdings_pct:.0f}%")
     safety = " | ".join(safety_bits) if safety_bits else "⚠️ unverified"
 
+    header = "🌱 EARLY LAUNCH"
+    if snap.launchpad:
+        header += f" · {escape(snap.launchpad)}"
     lines = [
-        f"<b>🌱 EARLY LAUNCH — ${escape(snap.symbol or '???')}</b>",
+        f"<b>{header} — ${escape(snap.symbol or '???')}</b>",
         f"Age: {_age(snap.age_minutes)} | MCAP: {_usd(snap.market_cap_usd)} | Liq: {_usd(snap.liquidity_usd)}",
         f"Holders: {snap.holder_count if snap.holder_count is not None else '?'} | "
         f"Top10: {_pct(snap.top10_supply_pct)}",

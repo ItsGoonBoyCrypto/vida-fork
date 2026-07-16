@@ -30,6 +30,7 @@ from .scoring import score_token
 from .sources.chain import EvmChainClient
 from .sources.dexscreener import DexScreenerClient
 from .sources.poollistener import PoolListener
+from .sources.launchpad_curve import LaunchpadCurveListener
 from .sources.safety import CompositeSafetySource
 from .sources.smartmoney import SmartMoneyClient
 from .storage import Storage
@@ -51,6 +52,9 @@ class Scanner:
         # PoolListener is stateful (tracks last scanned block) so it persists
         # across cycles; bound to the shared session in run_forever/scan-once.
         self._listener: Optional[PoolListener] = None
+        # Bonding-curve launchpad listener (flap.sh) — catches tokens on the
+        # curve, before they graduate to a DEX (i.e. before DexScreener sees them).
+        self._curve_listener: Optional[LaunchpadCurveListener] = None
         self.paper = PaperTrader(cfg, self.storage) if cfg.runtime.paper_mode else None
         self._last_digest_ts: Optional[float] = None
         self._wallet_watcher = None  # bound to the shared session in run_once
@@ -276,11 +280,16 @@ class Scanner:
         dex = DexScreenerClient(self.cfg, session=self._session)
         if self._listener is None:
             self._listener = PoolListener(self.cfg, session=self._session)
+        if self._curve_listener is None:
+            self._curve_listener = LaunchpadCurveListener(self.cfg, session=self._session)
 
-        # Two discovery streams: DexScreener (indexed) + factory logs (earliest).
-        dex_pairs, fresh_pairs = await asyncio.gather(
+        # Three discovery streams: DexScreener (indexed), DEX factory logs
+        # (earliest pool), and bonding-curve launchpad logs (earliest of all —
+        # flap tokens before they graduate to a pool DexScreener can see).
+        dex_pairs, fresh_pairs, curve_stubs = await asyncio.gather(
             dex.fetch_new_pairs(),
             self._listener.poll_new_pairs(),
+            self._curve_listener.poll_new_launches(),
         )
 
         # Merge, DexScreener winning on overlap (it carries market data). For
@@ -296,10 +305,30 @@ class Scanner:
                     if filled.pair_address.lower() == key:
                         merged[key] = filled
                         break
+
+        # Curve stubs have no pool yet, so they key on the token address. If a
+        # DexScreener/pool pair already covers that token (it graduated), keep the
+        # richer pair but preserve the launchpad label; otherwise backfill any
+        # market data that exists and carry the stub forward for scoring.
+        tokens_in_merged = {s.token_address.lower() for s in merged.values()}
+        for stub in curve_stubs:
+            tok = stub.token_address.lower()
+            if tok in tokens_in_merged:
+                for s in merged.values():
+                    if s.token_address.lower() == tok and not s.launchpad:
+                        s.launchpad = stub.launchpad
+                continue
+            filled = await dex.pairs_for_token(stub.token_address)
+            if filled:
+                best = filled[0]
+                best.launchpad = best.launchpad or stub.launchpad
+                merged[best.pair_address.lower()] = best
+            else:
+                merged["curve:" + tok] = stub   # pre-graduation, no pool yet
         pairs = list(merged.values())
         log.info(
-            "discovered %d pairs (dexscreener=%d, factory=%d)",
-            len(pairs), len(dex_pairs), len(fresh_pairs),
+            "discovered %d pairs (dexscreener=%d, factory=%d, curve=%d)",
+            len(pairs), len(dex_pairs), len(fresh_pairs), len(curve_stubs),
         )
 
         # Drop tokenized stocks (MU/TSLA/… "• Robinhood Token") — not memecoins.

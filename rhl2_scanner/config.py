@@ -98,6 +98,30 @@ class ChainConfig:
     launchpad_factory_address: str = ""       # legacy single (still honored if set)
     nft_position_manager: str = "0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3"        # Uniswap V3 NPM
 
+    # --- Bonding-curve launchpads (flap.sh etc.) ---
+    # Unlike NOXA (single-sided V3 at block 1), flap.sh launches tokens onto a
+    # constant-product BONDING CURVE. A token trades on the curve until ~80% of
+    # supply is bought, then "graduates" — liquidity is moved to a DEX pool.
+    # That's why flap tokens only appear on DexScreener AFTER graduation (late).
+    # To catch them EARLY we watch the flap manager contract's logs directly.
+    #
+    # Each entry: {name, manager, kind, create_topic?, graduate_topic?, boost?}
+    #   manager       — the curve-manager/factory contract that emits creations
+    #   kind          — "curve" (bonding curve) | "v3" (single-sided, uses the
+    #                   getLaunchedToken list above instead)
+    #   create_topic  — topic0 of the token-creation event (leave "" to run the
+    #                   listener in DISCOVERY mode: it logs every distinct topic0
+    #                   the manager emits so the real signature can be confirmed
+    #                   from the running host's logs, then set here)
+    #   graduate_topic— topic0 of the graduation/DEX-listing event (optional)
+    #   boost         — discovery-score bump for tokens from this launchpad
+    # Address left blank by default: set RHL2_FLAP_MANAGER on the host (grab it
+    # from the flap docs "Deployed Contracts" page) to light it up.
+    launchpads: list = field(default_factory=lambda: [
+        {"name": "flap", "manager": "", "kind": "curve",
+         "create_topic": "", "graduate_topic": "", "boost": 15},
+    ])
+
     # --- Third-party safety API (RugCheck-equivalent for EVM) ---
     # GoPlus Security token-security API is the de-facto EVM analog to RugCheck.
     # It keys chains by decimal chain id as a string (e.g. "8453" for Base).
@@ -298,6 +322,31 @@ class Config:
     def thresholds(self) -> Thresholds:
         return self.tiers[self.active_tier].thresholds
 
+    # -- Launchpads ------------------------------------------------------
+
+    def _launchpad(self, name: str) -> Optional[dict]:
+        """Return the named launchpad config dict (or None)."""
+        for lp in (self.chain.launchpads or []):
+            if isinstance(lp, dict) and lp.get("name") == name:
+                return lp
+        return None
+
+    def configured_launchpads(self) -> list[dict]:
+        """Launchpad entries that have a manager address set (usable)."""
+        return [lp for lp in (self.chain.launchpads or [])
+                if isinstance(lp, dict) and lp.get("manager")]
+
+    def known_launchpad_addresses(self) -> dict[str, str]:
+        """Map lowercased launchpad manager address -> launchpad name.
+
+        Used to recognise a token's origin (discovery boost + alert label) and
+        to treat a curve-manager-held LP as locked.
+        """
+        out: dict[str, str] = {}
+        for lp in self.configured_launchpads():
+            out[str(lp["manager"]).lower()] = lp.get("name", "launchpad")
+        return out
+
     # -- Loading ---------------------------------------------------------
 
     @classmethod
@@ -361,6 +410,17 @@ class Config:
             self.chain.dex_factory_kind = v
         if v := env.get("RHL2_DEX_ROUTER_KIND"):
             self.chain.dex_router_kind = v
+        # flap.sh bonding-curve launchpad. RHL2_FLAP_MANAGER is the only one you
+        # need to set to enable early (pre-graduation) flap discovery; the two
+        # topic overrides are for locking in the event signatures once confirmed.
+        flap = self._launchpad("flap")
+        if flap is not None:
+            if v := env.get("RHL2_FLAP_MANAGER"):
+                flap["manager"] = v.strip()
+            if v := env.get("RHL2_FLAP_CREATE_TOPIC"):
+                flap["create_topic"] = v.strip()
+            if v := env.get("RHL2_FLAP_GRADUATE_TOPIC"):
+                flap["graduate_topic"] = v.strip()
         # Whale wallets to watch — comma-separated 0x addresses (easy Railway var).
         if v := env.get("RHL2_WATCH_WALLETS"):
             self.wallet_watch.wallets = [w.strip().lower() for w in v.split(",") if w.strip()]

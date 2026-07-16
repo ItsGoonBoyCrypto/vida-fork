@@ -29,6 +29,24 @@ chain:
   pool_scan_block_lookback: 3000
   pool_scan_max_range: 5000
 
+  # --- Bonding-curve launchpads (flap.sh) — EARLIEST catch, pre-graduation ---
+  # flap launches onto a bonding curve; a token only hits DexScreener AFTER it
+  # graduates to a DEX (late for a runner). We watch the flap manager contract's
+  # logs to catch launches on the curve. To enable, set the manager address:
+  #     Railway var  RHL2_FLAP_MANAGER = 0x...   (from flap docs "Deployed Contracts")
+  # Leave create_topic blank at first — the listener logs every distinct event
+  # topic0 the manager emits (grep host logs for "curve discovery [flap]") so you
+  # can confirm the real token-creation signature, then pin it via:
+  #     RHL2_FLAP_CREATE_TOPIC = 0x...   and optionally  token_arg: topic1
+  launchpads:
+    - name: flap
+      manager: ""            # env RHL2_FLAP_MANAGER
+      kind: curve
+      create_topic: ""       # env RHL2_FLAP_CREATE_TOPIC (blank => discovery mode)
+      graduate_topic: ""     # env RHL2_FLAP_GRADUATE_TOPIC (optional)
+      token_arg: topic1      # where the new-token address sits in the create event
+      boost: 15              # discovery-score bump for flap-origin tokens
+
   # --- On-chain honeypot sell-sim ---
   # Uniswap V3 SwapRouter02 on Robinhood Chain (exactInputSingle sell-sim).
   dex_router_address: "0xCaf681a66D020601342297493863E78C959E5cb2"

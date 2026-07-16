@@ -108,6 +108,8 @@ class TokenSnapshot:
     dex_trending: bool = False
     socials: dict[str, str] = field(default_factory=dict)   # {"telegram": url, ...}
     smart_money_wallets: list[str] = field(default_factory=list)
+    launchpad: str = ""             # origin launchpad name if known (e.g. "flap")
+    curve_progress_pct: Optional[float] = None   # bonding-curve fill % (pre-graduation)
 
     # Links
     dexscreener_url: str = ""
