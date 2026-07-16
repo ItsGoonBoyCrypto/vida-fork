@@ -87,6 +87,26 @@ async def discover_chats(token: str,
             await session.close()
 
 
+async def get_updates(token: str, offset: Optional[int] = None,
+                      session: Optional[aiohttp.ClientSession] = None):
+    """Return (updates, next_offset). Used to receive /commands from the channel."""
+    own = session is None
+    session = session or aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
+    try:
+        params: dict = {"timeout": 0, "allowed_updates": '["message","channel_post"]'}
+        if offset is not None:
+            params["offset"] = offset
+        data = await _call(token, "getUpdates", params, session)
+        if not data or not data.get("ok"):
+            return [], offset
+        updates = data.get("result", [])
+        next_offset = (updates[-1]["update_id"] + 1) if updates else offset
+        return updates, next_offset
+    finally:
+        if own:
+            await session.close()
+
+
 async def get_bot_username(token: str,
                            session: Optional[aiohttp.ClientSession] = None) -> Optional[str]:
     own = session is None

@@ -84,11 +84,18 @@ class ChainConfig:
     lp_lockers: list = field(default_factory=list)
     lp_lock_min_fraction: float = 0.5                  # LP fraction at a locker => "locked"
 
-    # --- V3 launchpad LP-lock detection (NOXA on Robinhood Chain) ---
-    # The launcher's getLaunchedToken(token) returns the LP position NFT id +
-    # position manager + deployer, so we can check ownerOf(positionId): burned or
-    # protocol-held => safe; deployer-held => removable (rug risk).
-    launchpad_factory_address: str = "0xD9eC2db5f3D1b236843925949fe5bd8a3836FCcB"  # NOXA (4663)
+    # --- V3 launchpad LP-lock detection (getLaunchedToken pattern) ---
+    # Launchers exposing getLaunchedToken(token) -> (..., positionManager,
+    # positionId, deployer, ...) let us check ownerOf(positionId): burned or
+    # protocol-held => safe; deployer-held => removable (rug risk). Launchpads
+    # churn on RH Chain (NOXA rugged), so this is a LIST — add each launchpad's
+    # factory as they emerge; each is tried until one reports the token. LP-lock
+    # simply stays "unknown" (tolerated) for tokens from unlisted launchpads;
+    # the honeypot sell-sim + top10 + dev checks carry rug protection regardless.
+    launchpad_factory_addresses: list = field(
+        default_factory=lambda: ["0xD9eC2db5f3D1b236843925949fe5bd8a3836FCcB"]  # NOXA (may be dead)
+    )
+    launchpad_factory_address: str = ""       # legacy single (still honored if set)
     nft_position_manager: str = "0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3"        # Uniswap V3 NPM
 
     # --- Third-party safety API (RugCheck-equivalent for EVM) ---

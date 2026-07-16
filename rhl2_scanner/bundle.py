@@ -140,6 +140,7 @@ class BundleAnalyzer:
             snap.pair_address, c.dex_router_address, c.dex_factory_address,
             c.weth_address, c.launchpad_factory_address, c.nft_position_manager,
         }
+        addrs |= set(c.launchpad_factory_addresses or [])
         addrs |= set(c.excluded_holder_addresses)
         infra = {a.lower() for a in addrs if a}
         infra |= {"0x000000000000000000000000000000000000dead",

@@ -160,18 +160,26 @@ class EvmChainClient:
         is removable (rug risk, lp_locked=False); anything else (protocol/locker
         contract) => treated as locked.
         """
-        lf = self.chain.launchpad_factory_address
+        if self._session is None:
+            return
+        factories = list(self.chain.launchpad_factory_addresses or [])
+        if self.chain.launchpad_factory_address:
+            factories.append(self.chain.launchpad_factory_address)
         npm = self.chain.nft_position_manager
-        if not lf or self._session is None:
-            return
         token = snap.token_address
-        res = await self._eth_call(lf, "0x" + _SEL_GET_LAUNCHED + _pad_addr(token))
-        words = _words(res)
-        if words is None or len(words) < 12:
-            return
-        exists = int(words[11], 16) != 0
-        if not exists:
-            return  # not a launchpad token — leave LP unknown
+
+        # Try each known launchpad factory until one reports this token.
+        words = None
+        for lf in factories:
+            if not lf:
+                continue
+            res = await self._eth_call(lf, "0x" + _SEL_GET_LAUNCHED + _pad_addr(token))
+            w = _words(res)
+            if w is not None and len(w) >= 12 and int(w[11], 16) != 0:
+                words = w
+                break
+        if words is None:
+            return  # not from a known launchpad — leave LP unknown (tolerated)
         deployer = "0x" + words[1][-40:]
         position_manager = ("0x" + words[3][-40:]) if int(words[3], 16) else npm
         position_id = int(words[4], 16)

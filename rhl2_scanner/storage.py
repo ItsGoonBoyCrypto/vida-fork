@@ -64,6 +64,16 @@ CREATE TABLE IF NOT EXISTS wallet_seen (
     tx_key  TEXT PRIMARY KEY,   -- wallet|txhash|token
     ts      REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS muted_tokens (
+    token   TEXT PRIMARY KEY,   -- lowercased contract address, alerts suppressed
+    ts      REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS kv (
+    k  TEXT PRIMARY KEY,
+    v  TEXT
+);
 """
 
 
@@ -221,6 +231,41 @@ class Storage:
         self._conn.execute(
             "INSERT OR IGNORE INTO wallet_seen (tx_key, ts) VALUES (?, ?)",
             (tx_key, time.time()),
+        )
+        self._conn.commit()
+
+    # -- muted tokens (/zero) + key-value ------------------------------
+
+    def mute_token(self, token: str) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO muted_tokens (token, ts) VALUES (?, ?)",
+            (token.lower(), time.time()),
+        )
+        self._conn.commit()
+
+    def unmute_token(self, token: str) -> None:
+        self._conn.execute("DELETE FROM muted_tokens WHERE token = ?", (token.lower(),))
+        self._conn.commit()
+
+    def is_muted(self, token: str) -> bool:
+        if not token:
+            return False
+        cur = self._conn.execute("SELECT 1 FROM muted_tokens WHERE token = ?", (token.lower(),))
+        return cur.fetchone() is not None
+
+    def muted_tokens(self) -> list[str]:
+        cur = self._conn.execute("SELECT token FROM muted_tokens ORDER BY ts DESC")
+        return [r["token"] for r in cur.fetchall()]
+
+    def kv_get(self, key: str) -> Optional[str]:
+        cur = self._conn.execute("SELECT v FROM kv WHERE k = ?", (key,))
+        row = cur.fetchone()
+        return row["v"] if row else None
+
+    def kv_set(self, key: str, value: str) -> None:
+        self._conn.execute(
+            "INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+            (key, value),
         )
         self._conn.commit()
 

@@ -54,6 +54,7 @@ class Scanner:
         self.paper = PaperTrader(cfg, self.storage) if cfg.runtime.paper_mode else None
         self._last_digest_ts: Optional[float] = None
         self._wallet_watcher = None  # bound to the shared session in run_once
+        self._cmd_offset = None      # Telegram getUpdates offset (loaded from db)
 
     # -- lifecycle -------------------------------------------------------
 
@@ -97,6 +98,63 @@ class Scanner:
                 log.exception("send failed")
         print("\n" + text + "\n", flush=True)
 
+    async def _poll_commands(self) -> None:
+        """Receive /zero /unzero /muted from the alert channel and act on them."""
+        tg = self.cfg.telegram
+        if not tg.bot_token or not tg.alert_chat_id or self._session is None:
+            return
+        from .tgtools import get_updates
+        if self._cmd_offset is None:
+            saved = self.storage.kv_get("cmd_offset")
+            if saved is not None:
+                self._cmd_offset = int(saved)
+            else:
+                # First run: seed past the current backlog so we don't replay history.
+                _, nxt = await get_updates(tg.bot_token, None, self._session)
+                self._cmd_offset = nxt
+                if nxt is not None:
+                    self.storage.kv_set("cmd_offset", str(nxt))
+                return
+        try:
+            updates, nxt = await get_updates(tg.bot_token, self._cmd_offset, self._session)
+        except Exception:
+            log.debug("command poll failed")
+            return
+        for u in updates:
+            msg = u.get("message") or u.get("channel_post") or {}
+            chat = msg.get("chat") or {}
+            if str(chat.get("id")) != str(tg.alert_chat_id):
+                continue   # only accept commands from the configured channel
+            await self._handle_command((msg.get("text") or "").strip())
+        if nxt is not None and nxt != self._cmd_offset:
+            self._cmd_offset = nxt
+            self.storage.kv_set("cmd_offset", str(nxt))
+
+    async def _handle_command(self, text: str) -> None:
+        if not text.startswith("/"):
+            return
+        parts = text.split()
+        cmd = parts[0][1:].split("@")[0].lower()   # strip leading / and @botname
+        arg = parts[1].lower() if len(parts) > 1 else ""
+        valid_ca = arg.startswith("0x") and len(arg) == 42
+
+        if cmd == "zero":
+            if not valid_ca:
+                await self._send_html("Usage: <code>/zero 0x&lt;address&gt;</code>")
+                return
+            self.storage.mute_token(arg)
+            await self._send_html(f"🔇 Muted <code>{arg}</code> — alerts off for this token.")
+        elif cmd in ("unzero", "unmute"):
+            if not valid_ca:
+                await self._send_html("Usage: <code>/unzero 0x&lt;address&gt;</code>")
+                return
+            self.storage.unmute_token(arg)
+            await self._send_html(f"🔊 Unmuted <code>{arg}</code>.")
+        elif cmd == "muted":
+            lst = self.storage.muted_tokens()
+            body = "\n".join(f"<code>{t}</code>" for t in lst) if lst else "none"
+            await self._send_html(f"🔇 Muted tokens ({len(lst)}):\n{body}")
+
     async def _poll_wallets(self) -> None:
         if not self.cfg.wallet_watch.enabled or not self.cfg.wallet_watch.wallets:
             return
@@ -108,6 +166,8 @@ class Scanner:
             log.exception("wallet watch poll failed")
             return
         for ev in events:
+            if self.storage.is_muted(ev.token_address):
+                continue   # /zero'd token
             await self._send_html(format_whale_html(ev))
             log.info("WHALE %s %s $%s by %s", ev.side, ev.symbol, ev.usd, ev.label)
 
@@ -228,6 +288,9 @@ class Scanner:
                 (" missing_data=" + ",".join(missing)) if missing else "",
             )
 
+        # Handle inbound Telegram commands (/zero, /unzero, /muted).
+        await self._poll_commands()
+
         # Whale-wallet activity alerts (independent of the gem scan).
         await self._poll_wallets()
 
@@ -263,6 +326,9 @@ class Scanner:
         if self.paper is not None:
             paper_result = result if not strict else score_token(snap, self.cfg, strict_safety=False)
             self.paper.record(snap, paper_result)
+
+        if self.storage.is_muted(snap.token_address):
+            return result   # /zero'd — suppress all alerts for this token
 
         if result.level in (AlertLevel.STRONG, AlertLevel.WATCH):
             if self.storage.in_cooldown(snap.pair_address, self.cfg.runtime.realert_cooldown_seconds):
