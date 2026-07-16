@@ -521,22 +521,49 @@ class Scanner:
         token_noarg = ["price", "getPrice", "currentPrice", "reserves",
                        "getReserves", "totalRaised", "progress", "marketCap"]
 
+        from .sources.poollistener import _backoff, _transient
+        stats = {"errors": 0}
+
+        async def rpc(method, params):
+            payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+            for attempt in range(4):
+                try:
+                    async with self._session.post(self.cfg.chain.rpc_url, json=payload) as r:
+                        if r.status in (429, 503, 504):
+                            await _backoff(attempt)
+                            continue
+                        if r.status != 200:
+                            return None, f"HTTP {r.status}"
+                        d = await r.json()
+                        if isinstance(d, dict) and d.get("error"):
+                            msg = str(d["error"])
+                            if _transient(msg) and attempt < 3:
+                                await _backoff(attempt)
+                                continue
+                            return None, msg
+                        return d.get("result"), None
+                except Exception as exc:  # noqa: BLE001
+                    if attempt < 3:
+                        await _backoff(attempt)
+                        continue
+                    return None, str(exc)
+            return None, "rate-limited (exhausted retries)"
+
         async def call(target: str, data: str):
-            payload = {"jsonrpc": "2.0", "id": 1, "method": "eth_call",
-                       "params": [{"to": target, "data": "0x" + data}, "latest"]}
-            try:
-                async with self._session.post(self.cfg.chain.rpc_url, json=payload) as r:
-                    if r.status != 200:
-                        return None
-                    d = await r.json()
-                    return d.get("result")
-            except Exception:  # noqa: BLE001
-                return None
+            res, err = await rpc("eth_call", [{"to": target, "data": "0x" + data}, "latest"])
+            if err:
+                stats["errors"] += 1
+            return res
 
         def interesting(res) -> bool:
             return bool(res) and res != "0x" and set(res.replace("0x", "")) != {"0"}
 
         lines = [f"=== CURVE PROBE {token} ===", f"Portal: {portal}"]
+        # Confirm both are contracts (rules out a wrong/graduated CA).
+        tcode, _ = await rpc("eth_getCode", [token, "latest"])
+        pcode, _ = await rpc("eth_getCode", [portal, "latest"])
+        lines.append(f"token is contract: {bool(tcode) and tcode != '0x'} | "
+                     f"Portal is contract: {bool(pcode) and pcode != '0x'}")
         hits = 0
         for name in addr_fns:
             res = await call(portal, sel(f"{name}(address)") + tok)
@@ -553,11 +580,16 @@ class Scanner:
             if interesting(res):
                 hits += 1
                 lines.append(f"token.{name}() → {res[:200]}")
-        if not hits:
-            lines.append("no known getter returned data — the Portal likely uses "
-                         "different names. Grab the read function from flap docs.")
+        lines.append("")
+        if hits:
+            lines.append(f"{hits} getter(s) returned data — paste this back to pin pricing.")
+        elif stats["errors"] > len(addr_fns):
+            lines.append(f"⚠️ {stats['errors']} calls errored (RPC rate-limited) — inconclusive. "
+                         "Re-run /curveprobe in a minute when the RPC is quieter.")
         else:
-            lines.append(f"\n{hits} getter(s) returned data — paste this back to pin pricing.")
+            lines.append("No known getter returned data (calls succeeded, values empty). "
+                         "flap uses non-standard names or per-token curve contracts — "
+                         "grab the read function from the flap docs.")
         return "\n".join(lines)
 
     async def _calibrate_one(self, ca: str) -> dict:

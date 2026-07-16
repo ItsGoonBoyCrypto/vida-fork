@@ -31,6 +31,8 @@ class TestCurveProbe(unittest.IsolatedAsyncioTestCase):
 
         class FakeSession:
             def post(self, url, json):
+                if json["method"] == "eth_getCode":
+                    return FakeResp("0x60016002")     # has code (is a contract)
                 data = json["params"][0]["data"]
                 # only price(address) returns a non-zero value
                 if data[2:10] == price_sel:
