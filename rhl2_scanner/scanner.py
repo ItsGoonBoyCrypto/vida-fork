@@ -486,7 +486,7 @@ class Scanner:
             lines.append(f"   manager. Set on Railway:  RHL2_FLAP_MANAGER={creator}")
         return "\n".join(lines)
 
-    async def curveprobe(self, token: str) -> str:
+    async def curveprobe(self, token: str, delay: float = 0.35) -> str:
         """Probe the flap Portal for a token's on-chain curve price/state.
 
         We don't have flap's ABI, so try a battery of common bonding-curve view
@@ -558,28 +558,33 @@ class Scanner:
         def interesting(res) -> bool:
             return bool(res) and res != "0x" and set(res.replace("0x", "")) != {"0"}
 
+        import asyncio
         lines = [f"=== CURVE PROBE {token} ===", f"Portal: {portal}"]
-        # Confirm both are contracts (rules out a wrong/graduated CA).
-        tcode, _ = await rpc("eth_getCode", [token, "latest"])
-        pcode, _ = await rpc("eth_getCode", [portal, "latest"])
-        lines.append(f"token is contract: {bool(tcode) and tcode != '0x'} | "
-                     f"Portal is contract: {bool(pcode) and pcode != '0x'}")
+        # Confirm the token is a contract FIRST (reliably) — no point probing an
+        # EOA / wrong CA. Only trust a definitive '0x' (call succeeded).
+        tcode, terr = await rpc("eth_getCode", [token, "latest"])
+        if terr is None and (not tcode or tcode == "0x"):
+            lines.append("token is NOT a contract on-chain — double-check the CA "
+                         "(is it the token address, and did you copy it whole?).")
+            return "\n".join(lines)
+        if terr is not None:
+            lines.append(f"⚠️ couldn't verify token (RPC {terr}) — proceeding anyway.")
+
+        async def sweep(target, sigs, argsuffix):
+            nonlocal hits
+            for name, sig in sigs:
+                res = await call(target, sel(sig) + argsuffix)
+                if interesting(res):
+                    hits += 1
+                    lines.append(f"{name} → {res[:200]}")
+                if delay:
+                    await asyncio.sleep(delay)   # stay under the RPC rate limit
+
         hits = 0
-        for name in addr_fns:
-            res = await call(portal, sel(f"{name}(address)") + tok)
-            if interesting(res):
-                hits += 1
-                lines.append(f"Portal.{name}(address) → {res[:200]}")
-        for name in quote_fns:
-            res = await call(portal, sel(f"{name}(address,uint256)") + tok + amt)
-            if interesting(res):
-                hits += 1
-                lines.append(f"Portal.{name}(address,uint256) → {res[:200]}")
-        for name in token_noarg:
-            res = await call(token, sel(f"{name}()"))
-            if interesting(res):
-                hits += 1
-                lines.append(f"token.{name}() → {res[:200]}")
+        await sweep(portal, [(f"Portal.{n}(address)", f"{n}(address)") for n in addr_fns], tok)
+        await sweep(portal, [(f"Portal.{n}(address,uint256)", f"{n}(address,uint256)")
+                             for n in quote_fns], tok + amt)
+        await sweep(token, [(f"token.{n}()", f"{n}()") for n in token_noarg], "")
         lines.append("")
         if hits:
             lines.append(f"{hits} getter(s) returned data — paste this back to pin pricing.")

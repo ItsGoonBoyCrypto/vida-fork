@@ -41,7 +41,7 @@ class TestCurveProbe(unittest.IsolatedAsyncioTestCase):
 
         sc._session = FakeSession()  # type: ignore
         try:
-            out = await sc.curveprobe(TOKEN)
+            out = await sc.curveprobe(TOKEN, delay=0)
             self.assertIn("CURVE PROBE", out)
             self.assertIn("Portal.price(address)", out)
             self.assertIn("returned data", out)
