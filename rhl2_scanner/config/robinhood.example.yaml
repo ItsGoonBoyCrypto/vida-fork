@@ -156,6 +156,14 @@ smart_money_wallets:
   - "0xc1a3e23049e2f016d61d2a2e4fbb241df20b10d7"
   - "0xe781b28e02ed5fc4b989905cb6848d318f4735fd"
   - "0x5638484ba2d2f1d1d35020572b0aa439a9869192"
+  - "0x82608cb7ba84322a7a0d4cc0df8f1d2d065877ef"
+  - "0x39069add37ea21d3db98e01e8ad81bacef739168"
+  - "0x6099ff02f63c69162175249c2700c84c0a94dafa"
+  - "0x8e65cbcdc822968131b1e37e5cee02c9ce82ab21"
+  - "0xf70da97812cb96acdf810712aa562db8dfa3dbef"
+  - "0x8f47a238c7701247ee8469ddc37ac1df121cfcce"
+  - "0x3b1f57028e5bc1f28c7201b1f6bd913e46b64e62"
+  - "0x16f5ef133d0d15b196a778d22bf1ec56f8f37c05"
 
 # Whale / smart-money wallet activity alerts (independent of the gem scan).
 # Fastest to enable: set env RHL2_WATCH_WALLETS=0xabc...,0xdef... in Railway.
@@ -169,6 +177,14 @@ wallet_watch:
     - "0xc1a3e23049e2f016d61d2a2e4fbb241df20b10d7"
     - "0xe781b28e02ed5fc4b989905cb6848d318f4735fd"
     - "0x5638484ba2d2f1d1d35020572b0aa439a9869192"
+    - "0x82608cb7ba84322a7a0d4cc0df8f1d2d065877ef"
+    - "0x39069add37ea21d3db98e01e8ad81bacef739168"
+    - "0x6099ff02f63c69162175249c2700c84c0a94dafa"
+    - "0x8e65cbcdc822968131b1e37e5cee02c9ce82ab21"
+    - "0xf70da97812cb96acdf810712aa562db8dfa3dbef"
+    - "0x8f47a238c7701247ee8469ddc37ac1df121cfcce"
+    - "0x3b1f57028e5bc1f28c7201b1f6bd913e46b64e62"
+    - "0x16f5ef133d0d15b196a778d22bf1ec56f8f37c05"
   labels:
     "0xae6ad7c09668c8c6b2838e0c92b28fb2db891ff7": "Early 1"
     "0xbde8bbc336b548357c841b5a5290f553e4ff8809": "Early 2"
@@ -176,6 +192,14 @@ wallet_watch:
     "0xc1a3e23049e2f016d61d2a2e4fbb241df20b10d7": "Early 4"
     "0xe781b28e02ed5fc4b989905cb6848d318f4735fd": "Early 5"
     "0x5638484ba2d2f1d1d35020572b0aa439a9869192": "Early 6"
+    "0x82608cb7ba84322a7a0d4cc0df8f1d2d065877ef": "Early 7"
+    "0x39069add37ea21d3db98e01e8ad81bacef739168": "Early 8"
+    "0x6099ff02f63c69162175249c2700c84c0a94dafa": "Early 9"
+    "0x8e65cbcdc822968131b1e37e5cee02c9ce82ab21": "Early 10"
+    "0xf70da97812cb96acdf810712aa562db8dfa3dbef": "Early 11"
+    "0x8f47a238c7701247ee8469ddc37ac1df121cfcce": "Early 12"
+    "0x3b1f57028e5bc1f28c7201b1f6bd913e46b64e62": "Early 13"
+    "0x16f5ef133d0d15b196a778d22bf1ec56f8f37c05": "Early 14"
   alert_on: "buys_sells"       # alert on both entries and exits
   min_usd: 100                 # ignore transfers below this USD value
   max_transfers_per_wallet: 25

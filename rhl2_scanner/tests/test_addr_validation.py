@@ -43,11 +43,16 @@ class TestEnvRejectsLabel(unittest.TestCase):
 
 
 class TestSeededWallets(unittest.TestCase):
-    def test_six_early_wallets_seeded(self):
+    def test_early_wallets_seeded(self):
         cfg = Config.load("rhl2_scanner/config/robinhood.example.yaml")
-        self.assertEqual(len(cfg.smart_money_wallets), 6)
-        self.assertIn("0xae6ad7c09668c8c6b2838e0c92b28fb2db891ff7",
-                      cfg.smart_money_wallets)
+        # All seeded wallets are valid, unique, and mirrored into the watch list.
+        sm = cfg.smart_money_wallets
+        self.assertGreaterEqual(len(sm), 14)
+        self.assertEqual(len(sm), len(set(sm)))               # no dupes
+        self.assertTrue(all(_looks_like_address(a) for a in sm))
+        self.assertIn("0xae6ad7c09668c8c6b2838e0c92b28fb2db891ff7", sm)
+        self.assertIn("0x16f5ef133d0d15b196a778d22bf1ec56f8f37c05", sm)
+        self.assertEqual(set(sm), set(cfg.wallet_watch.wallets))
 
 
 class TestWalletAcquisitions(unittest.IsolatedAsyncioTestCase):
