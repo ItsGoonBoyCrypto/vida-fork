@@ -732,15 +732,19 @@ class Scanner:
             log.exception("wallet watch poll failed")
             return
         smart_set = {w.lower() for w in self.cfg.smart_money_wallets}
-        blocked = self._blocked_symbols()
+        blocked = set(self._blocked_symbols())
+        emit = self.cfg.wallet_watch.emit_alerts
         for ev in events:
             if self.storage.is_muted(ev.token_address):
                 continue   # /zero'd token
-            if blocked and _norm_symbol(ev.symbol) in set(blocked):
+            if blocked and _norm_symbol(ev.symbol) in blocked:
                 continue   # scam-impersonator symbol
-            await self._send_html(format_whale_html(ev))
-            log.info("WHALE %s %s $%s by %s", ev.side, ev.symbol, ev.usd, ev.label)
+            # Individual whale ping (optional — the data is still used below).
+            if emit:
+                await self._send_html(format_whale_html(ev))
+                log.info("WHALE %s %s $%s by %s", ev.side, ev.symbol, ev.usd, ev.label)
             # Smart-money cluster: record buys by smart wallets, alert on convergence.
+            # This runs regardless of emit_alerts — it's how we "use the data".
             if ev.side == "buy" and ev.wallet.lower() in smart_set:
                 await self._check_cluster(ev)
 

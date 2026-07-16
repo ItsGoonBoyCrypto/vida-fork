@@ -349,6 +349,11 @@ class WalletWatchConfig:
     alert_on: str = "buys"                            # "buys" | "buys_sells"
     min_usd: float = 100.0                            # ignore transfers below this USD
     max_transfers_per_wallet: int = 25               # per poll, per wallet
+    # Emit individual "🐋 whale bought X" pings. Off => still POLL these wallets
+    # and feed their buys into the smart-money cluster signal + gem scoring, just
+    # without the per-buy notifications. (Cluster convergence alerts are separate
+    # and stay on — that's the high-signal "increase our chances" part.)
+    emit_alerts: bool = True
 
 
 @dataclass
@@ -490,6 +495,9 @@ class Config:
                 self.wallet_watch.min_usd = float(v)
             except ValueError:
                 pass
+        # Toggle the individual whale pings without losing the smart-money data.
+        if v := env.get("RHL2_WHALE_ALERTS"):
+            self.wallet_watch.emit_alerts = v.lower() in ("1", "true", "yes")
         # Smart-money seed set — comma-separated 0x wallets that bought previous
         # bangers early. A token bought by these scores higher (discovery) and,
         # with autoseed on, a token that graduates to a STRONG alert donates its
