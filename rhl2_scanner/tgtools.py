@@ -93,7 +93,8 @@ async def get_updates(token: str, offset: Optional[int] = None,
     own = session is None
     session = session or aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
     try:
-        params: dict = {"timeout": 0, "allowed_updates": '["message","channel_post"]'}
+        # No allowed_updates => Telegram returns all types incl. channel_post.
+        params: dict = {"timeout": 0}
         if offset is not None:
             params["offset"] = offset
         data = await _call(token, "getUpdates", params, session)

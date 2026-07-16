@@ -158,26 +158,25 @@ class Scanner:
         from .tgtools import get_updates
         if self._cmd_offset is None:
             saved = self.storage.kv_get("cmd_offset")
-            if saved is not None:
-                self._cmd_offset = int(saved)
-            else:
-                # First run: seed past the current backlog so we don't replay history.
-                _, nxt = await get_updates(tg.bot_token, None, self._session)
-                self._cmd_offset = nxt
-                if nxt is not None:
-                    self.storage.kv_set("cmd_offset", str(nxt))
-                return
+            # None offset => getUpdates returns pending commands, which we DO
+            # process (so a /command sent right after a deploy isn't skipped).
+            self._cmd_offset = int(saved) if saved is not None else None
         try:
             updates, nxt = await get_updates(tg.bot_token, self._cmd_offset, self._session)
         except Exception:
             log.debug("command poll failed")
             return
         for u in updates:
-            msg = u.get("message") or u.get("channel_post") or {}
+            msg = u.get("message") or u.get("channel_post") or u.get("edited_channel_post") or {}
             chat = msg.get("chat") or {}
+            text = (msg.get("text") or "").strip()
+            if not text.startswith("/"):
+                continue
             if str(chat.get("id")) != str(tg.alert_chat_id):
-                continue   # only accept commands from the configured channel
-            await self._handle_command((msg.get("text") or "").strip())
+                log.info("ignoring command from chat %s (expected %s)", chat.get("id"), tg.alert_chat_id)
+                continue
+            log.info("command: %s", text)
+            await self._handle_command(text)
         if nxt is not None and nxt != self._cmd_offset:
             self._cmd_offset = nxt
             self.storage.kv_set("cmd_offset", str(nxt))
