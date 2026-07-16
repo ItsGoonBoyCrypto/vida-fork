@@ -117,6 +117,36 @@ def to_plain(snap: TokenSnapshot, result: ScoreResult) -> str:
     return body
 
 
+def format_early_launch_html(snap: TokenSnapshot, result: ScoreResult) -> str:
+    """Compact 'fresh & safe' early-entry alert (below the maturity score band)."""
+    s = snap.safety
+    safety_bits = []
+    if s.mint_authority_revoked and s.freeze_authority_revoked:
+        safety_bits.append("✅ Revoked")
+    if s.lp_burned:
+        safety_bits.append("✅ LP Burned")
+    elif s.lp_locked:
+        safety_bits.append("✅ LP Locked")
+    if s.is_honeypot is False:
+        safety_bits.append("✅ Sellable")
+    if s.dev_holdings_pct is not None:
+        safety_bits.append(f"dev {s.dev_holdings_pct:.0f}%")
+    safety = " | ".join(safety_bits) if safety_bits else "⚠️ unverified"
+
+    lines = [
+        f"<b>🌱 EARLY LAUNCH — ${escape(snap.symbol or '???')}</b>",
+        f"Age: {_age(snap.age_minutes)} | MCAP: {_usd(snap.market_cap_usd)} | Liq: {_usd(snap.liquidity_usd)}",
+        f"Holders: {snap.holder_count if snap.holder_count is not None else '?'} | "
+        f"Top10: {_pct(snap.top10_supply_pct)}",
+        f"Safety: {safety}",
+        f"CA: <code>{escape(snap.token_address)}</code>",
+    ]
+    if snap.dexscreener_url:
+        lines.append(f'<a href="{escape(snap.dexscreener_url)}">DexScreener</a>')
+    lines.append("<i>Fresh launch — highest risk/reward. DYOR, size small.</i>")
+    return "\n".join(lines)
+
+
 def to_telegram_html(snap: TokenSnapshot, result: ScoreResult) -> str:
     lines = []
     for line in build_lines(snap, result):

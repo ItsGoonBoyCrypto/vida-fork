@@ -147,6 +147,17 @@ class TestQuickStartGate(unittest.TestCase):
         self.assertTrue(is_stock_token(clean_token(name="Micron Technology • Robinhood Token")))
         self.assertFalse(is_stock_token(clean_token(name="Pepe Rocket")))
 
+
+class TestEarlyLaunch(unittest.TestCase):
+    def test_early_launch_formatter(self):
+        from rhl2_scanner.alerting.formatter import format_early_launch_html
+        snap = clean_token(age_minutes=8, liquidity_usd=6000, holder_count=12, top10_supply_pct=55)
+        r = score_token(snap, Config(), strict_safety=True)
+        html = format_early_launch_html(snap, r)
+        self.assertIn("EARLY LAUNCH", html)
+        self.assertIn(f"<code>{snap.token_address}</code>", html)   # copyable CA
+        self.assertIn("Age: 8m", html)
+
     def test_min_market_cap_floor_gates(self):
         from rhl2_scanner.config import Thresholds
         th = Thresholds(min_market_cap_usd=40_000)

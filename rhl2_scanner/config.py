@@ -227,6 +227,15 @@ class RuntimeConfig:
     # Re-alert suppression: don't re-alert the same token within this window.
     realert_cooldown_seconds: float = 6 * 3600
 
+    # --- Early-launch alerts (catch runners pre/just-after graduation) ---
+    # Fresh tokens have few holders + concentrated supply + little volume, so
+    # they can't reach the maturity-based score. This path alerts on a SAFE,
+    # brand-new launch regardless of that score — the "get in early" signal.
+    early_launch_enabled: bool = True
+    early_launch_max_age_minutes: float = 60      # only tokens this new
+    early_launch_min_liquidity_usd: float = 3000  # confirm a real (graduated) pool
+    early_launch_require_safety: bool = True       # still require the safety gate to pass
+
     # --- Paper trading / calibration ---
     paper_mode: bool = False                   # record would-be entries + realized outcomes
     # Record any safety-passing candidate at/above this composite (below the

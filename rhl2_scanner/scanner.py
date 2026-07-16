@@ -34,6 +34,7 @@ from .sources.safety import CompositeSafetySource
 from .sources.smartmoney import SmartMoneyClient
 from .storage import Storage
 from .walletwatch import WalletWatcher, format_whale_html
+from .alerting.formatter import format_early_launch_html
 from .alerting.telegram import TelegramNotifier
 
 log = logging.getLogger("rhl2.scanner")
@@ -270,10 +271,35 @@ class Scanner:
                 await self.notifier.send(snap, result)
                 self.storage.record_alert(snap, result)
                 log.info("ALERT %s %s score=%.0f", result.level.value, snap.symbol, result.composite)
+        elif self._is_early_launch(snap, result):
+            if not self.storage.in_cooldown(snap.pair_address, self.cfg.runtime.realert_cooldown_seconds):
+                await self._send_html(format_early_launch_html(snap, result))
+                self.storage.record_alert(snap, result)
+                log.info("EARLY %s age=%.0fm liq=%s", snap.symbol, snap.age_minutes or 0, snap.liquidity_usd)
         else:
             reasons = ", ".join(result.gate_failures[:3]) if result.gate_failures else "low score"
             log.debug("skip %s (%s)", snap.symbol, reasons)
         return result
+
+    def _is_early_launch(self, snap: TokenSnapshot, result: ScoreResult) -> bool:
+        """A fresh, SAFE launch worth an early-entry ping even below the score band.
+
+        This is the "catch runners pre/just-after graduation" path: young tokens
+        can't reach the maturity-based score, so we alert on safety + freshness +
+        a real (graduated) pool instead. Tokenized stocks excluded.
+        """
+        rc = self.cfg.runtime
+        if not rc.early_launch_enabled or self.cfg.runtime.dry_run:
+            return False
+        if snap.age_minutes is None or snap.age_minutes > rc.early_launch_max_age_minutes:
+            return False
+        if (snap.liquidity_usd or 0) < rc.early_launch_min_liquidity_usd:
+            return False
+        if is_stock_token(snap):
+            return False
+        if rc.early_launch_require_safety and not result.safety_passed:
+            return False
+        return True
 
     async def _enrich(self, snap: TokenSnapshot) -> None:
         """Attach safety, distribution, bundle, and smart-money facts.
