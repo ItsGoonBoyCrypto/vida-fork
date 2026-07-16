@@ -605,6 +605,43 @@ class Scanner:
             self._cmd_offset = nxt
             self.storage.kv_set("cmd_offset", str(nxt))
 
+    @staticmethod
+    def _help_text() -> str:
+        return "\n".join([
+            "🤖 <b>RH L2 Scanner — commands</b>",
+            "",
+            "<b>Diagnostics</b>",
+            "<code>/diag</code> — RPC + DB + feature health check",
+            "<code>/perf</code> — how your alerts have performed (peak x, hit/rug rate)",
+            "<code>/inspect 0xCA</code> — trace one token through the full pipeline",
+            "",
+            "<b>Mute a token</b>",
+            "<code>/zero 0xCA</code> — stop alerts for this token",
+            "<code>/unzero 0xCA</code> — un-mute it",
+            "<code>/muted</code> — list muted tokens",
+            "",
+            "<b>Block scam symbols</b>",
+            "<code>/block SYMBOL</code> — never alert this ticker (e.g. /block ROBINHOOD)",
+            "<code>/unblock SYMBOL</code> — remove a runtime block",
+            "<code>/blocked</code> — list blocked symbols",
+            "",
+            "<b>Smart-money wallets</b>",
+            "<code>/smart 0xWallet</code> — add a wallet to the smart-money set",
+            "<code>/unsmart 0xWallet</code> — remove one",
+            "<code>/smartlist</code> — list them (manual vs auto-harvested)",
+            "<code>/group 0xA 0xB</code> — merge sybil wallets into one entity (cluster counts them once)",
+            "<code>/ungroup 0xWallet</code> — undo a runtime group",
+            "<code>/groups</code> — list wallet groups",
+            "",
+            "<b>Research &amp; tuning</b>",
+            "<code>/wallet 0xWallet</code> — what tokens a wallet recently bought",
+            "<code>/deployer 0xToken</code> — who created a token (finds a launchpad's manager)",
+            "<code>/calibrate 0xCA1 0xCA2 …</code> — tune thresholds against your known winners",
+            "",
+            "<i>Alerts you'll get: 🚨 Gem / 👀 Watch / 🌱 Early · 🔼 Upgrades · "
+            "🧠🚨 Smart-money clusters.</i>",
+        ])
+
     async def _handle_command(self, text: str) -> None:
         if not text.startswith("/"):
             return
@@ -613,7 +650,40 @@ class Scanner:
         arg = parts[1].lower() if len(parts) > 1 else ""
         valid_ca = arg.startswith("0x") and len(arg) == 42
 
-        if cmd == "zero":
+        if cmd in ("help", "start", "commands"):
+            await self._send_html(self._help_text())
+        elif cmd in ("group",):
+            addrs = [p.lower() for p in parts[1:] if p.lower().startswith("0x") and len(p) == 42]
+            if len(addrs) < 2:
+                await self._send_html("Usage: <code>/group 0xWalletA 0xWalletB [more…]</code> "
+                                      "— merge sybil wallets into one entity")
+                return
+            # Reuse an existing group if any address already has one, else make one.
+            existing = self._entity_of(addrs[0])
+            group = existing if existing != addrs[0] else f"grp:{addrs[0][:8]}"
+            for a in addrs:
+                self.storage.set_wallet_group(a, group)
+            await self._send_html(f"🔗 Grouped {len(addrs)} wallets as <b>{group}</b> — "
+                                  "they now count as one buyer for cluster alerts.")
+        elif cmd in ("ungroup",):
+            if not valid_ca:
+                await self._send_html("Usage: <code>/ungroup 0x&lt;wallet&gt;</code>")
+                return
+            self.storage.remove_wallet_group(arg)
+            await self._send_html(f"🔗 Ungrouped <code>{arg}</code> (config groups, if any, remain).")
+        elif cmd in ("groups", "grouplist"):
+            merged: dict[str, list] = {}
+            allg = {**(self.cfg.wallet_watch.wallet_groups or {}), **self.storage.wallet_groups()}
+            for w, g in allg.items():
+                merged.setdefault(g, []).append(w)
+            if not merged:
+                await self._send_html("🔗 No wallet groups.")
+                return
+            lines = ["🔗 <b>Wallet groups</b> (count as one buyer each):"]
+            for g, ws in merged.items():
+                lines.append(f"<b>{g}</b>: " + ", ".join(f"<code>{w[:6]}…{w[-4:]}</code>" for w in ws))
+            await self._send_html("\n".join(lines))
+        elif cmd == "zero":
             if not valid_ca:
                 await self._send_html("Usage: <code>/zero 0x&lt;address&gt;</code>")
                 return
@@ -767,8 +837,14 @@ class Scanner:
                 await self._check_cluster(ev)
 
     def _entity_of(self, addr: str) -> str:
-        """Resolve a wallet to its sybil-group entity (or itself if ungrouped)."""
-        return self.cfg.wallet_watch.wallet_groups.get(addr.lower(), addr.lower())
+        """Resolve a wallet to its sybil-group entity (or itself if ungrouped).
+
+        DB groups (/group) override config groups; ungrouped wallets are their
+        own entity.
+        """
+        a = addr.lower()
+        groups = {**(self.cfg.wallet_watch.wallet_groups or {}), **self.storage.wallet_groups()}
+        return groups.get(a, a)
 
     async def _check_cluster(self, ev) -> None:
         """Fire a high-priority alert when N distinct ENTITIES converge on a token.
@@ -809,7 +885,7 @@ class Scanner:
         text = (
             "🟢 <b>RH L2 Scanner online</b>\n"
             f"Chain: robinhood (4663) · tier: {self.cfg.active_tier.value} · mode: {mode}\n"
-            "Watching for early gems…"
+            "Watching for early gems… (type /help for commands)"
         )
         try:
             from .tgtools import send_message

@@ -101,6 +101,11 @@ CREATE TABLE IF NOT EXISTS cluster_alerts (
     ts      REAL NOT NULL,
     n       INTEGER             -- distinct buyers at alert time
 );
+
+CREATE TABLE IF NOT EXISTS wallet_groups (
+    wallet  TEXT PRIMARY KEY,   -- lowercased wallet address
+    grp     TEXT NOT NULL       -- shared sybil-entity name
+);
 """
 
 
@@ -397,6 +402,24 @@ class Storage:
             (token.lower(), time.time(), n),
         )
         self._conn.commit()
+
+    # -- sybil wallet groups (/group) -----------------------------------
+
+    def set_wallet_group(self, wallet: str, group: str) -> None:
+        self._conn.execute(
+            "INSERT INTO wallet_groups (wallet, grp) VALUES (?, ?) "
+            "ON CONFLICT(wallet) DO UPDATE SET grp = excluded.grp",
+            (wallet.lower(), group),
+        )
+        self._conn.commit()
+
+    def remove_wallet_group(self, wallet: str) -> None:
+        self._conn.execute("DELETE FROM wallet_groups WHERE wallet = ?", (wallet.lower(),))
+        self._conn.commit()
+
+    def wallet_groups(self) -> dict[str, str]:
+        cur = self._conn.execute("SELECT wallet, grp FROM wallet_groups")
+        return {r["wallet"]: r["grp"] for r in cur.fetchall()}
 
     def kv_get(self, key: str) -> Optional[str]:
         cur = self._conn.execute("SELECT v FROM kv WHERE k = ?", (key,))
