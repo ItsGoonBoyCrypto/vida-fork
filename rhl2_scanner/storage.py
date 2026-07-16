@@ -444,6 +444,24 @@ class Storage:
             "SELECT 1 FROM smart_buys WHERE token = ? LIMIT 1", (token.lower(),))
         return cur.fetchone() is not None
 
+    # -- activity snapshot (/stats) -------------------------------------
+
+    def activity_stats(self, since_ts: float) -> dict:
+        """Counts of discovery/alert/follow-up activity since ``since_ts``."""
+        def _c(sql, *args):
+            return self._conn.execute(sql, args).fetchone()[0]
+        return {
+            "discovered": _c("SELECT COUNT(*) FROM seen_tokens WHERE first_seen >= ?", since_ts),
+            "tracked_total": _c("SELECT COUNT(*) FROM seen_tokens"),
+            "alerts": _c("SELECT COUNT(*) FROM alerts WHERE ts >= ?", since_ts),
+            "clusters": _c("SELECT COUNT(*) FROM cluster_alerts WHERE ts >= ?", since_ts),
+            "milestones": _c("SELECT COUNT(*) FROM pos_events WHERE ts >= ? AND key LIKE '%|x%'", since_ts),
+            "dumps": _c("SELECT COUNT(*) FROM pos_events WHERE ts >= ? AND key LIKE '%|dump'", since_ts),
+            "exits": _c("SELECT COUNT(*) FROM pos_events WHERE ts >= ? AND key LIKE '%|exit|%'", since_ts),
+            "best_score": _c("SELECT COALESCE(MAX(best_score), 0) FROM seen_tokens WHERE last_scored >= ?", since_ts),
+            "open_positions": _c("SELECT COUNT(*) FROM paper_trades WHERE settled = 0"),
+        }
+
     def kv_get(self, key: str) -> Optional[str]:
         cur = self._conn.execute("SELECT v FROM kv WHERE k = ?", (key,))
         row = cur.fetchone()

@@ -651,6 +651,7 @@ class Scanner:
             "",
             "<b>Diagnostics</b>",
             "<code>/diag</code> — RPC + DB + feature health check",
+            "<code>/stats [hours]</code> — activity snapshot (discovered/alerts/clusters)",
             "<code>/perf</code> — how your alerts have performed (peak x, hit/rug rate)",
             "<code>/inspect 0xCA</code> — trace one token through the full pipeline",
             "",
@@ -772,6 +773,21 @@ class Scanner:
             if arg in self.cfg.smart_money_wallets:
                 self.cfg.smart_money_wallets.remove(arg)
             await self._send_html(f"🧠 Removed <code>{arg}</code>.")
+        elif cmd in ("stats", "activity"):
+            hours = 24.0
+            if len(parts) > 1:
+                try:
+                    hours = max(1.0, float(parts[1]))
+                except ValueError:
+                    pass
+            st = self.storage.activity_stats(time.time() - hours * 3600.0)
+            await self._send_html(
+                f"📊 <b>Activity — last {hours:g}h</b>\n"
+                f"Discovered: <b>{st['discovered']}</b> new tokens "
+                f"(tracking {st['tracked_total']} total)\n"
+                f"Alerts: <b>{st['alerts']}</b> · Clusters: <b>{st['clusters']}</b>\n"
+                f"Follow-ups: 📈 {st['milestones']} · ⚠️ {st['dumps']} · 🔴 {st['exits']}\n"
+                f"Best score: {st['best_score']:.0f} · Monitoring {st['open_positions']} positions")
         elif cmd in ("perf", "performance"):
             from .paper import PaperTrader, format_digest_html
             win = self.cfg.runtime.paper_digest_win_multiple
