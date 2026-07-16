@@ -30,6 +30,7 @@ import aiohttp
 
 from ..config import Config
 from ..models import TokenSnapshot
+from .poollistener import _backoff, _transient
 
 log = logging.getLogger("rhl2.launchpad_curve")
 
@@ -196,19 +197,31 @@ class LaunchpadCurveListener:
         assert self._session is not None
         self._rpc_id += 1
         payload = {"jsonrpc": "2.0", "id": self._rpc_id, "method": method, "params": params}
-        try:
-            async with self._session.post(self.chain.rpc_url, json=payload) as resp:
-                if resp.status != 200:
-                    log.warning("curve listener: RPC %s HTTP %s", method, resp.status)
-                    return None
-                data = await resp.json()
-                if isinstance(data, dict) and data.get("error"):
-                    log.warning("curve listener: RPC %s error: %s", method, data["error"])
-                    return None
-                return data.get("result")
-        except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
-            log.warning("curve listener: RPC %s failed: %s", method, exc)
-            return None
+        # Retry transient rate-limits/timeouts (see poollistener for rationale).
+        for attempt in range(4):
+            try:
+                async with self._session.post(self.chain.rpc_url, json=payload) as resp:
+                    if resp.status in (429, 503, 504):
+                        await _backoff(attempt)
+                        continue
+                    if resp.status != 200:
+                        log.warning("curve listener: RPC %s HTTP %s", method, resp.status)
+                        return None
+                    data = await resp.json()
+                    if isinstance(data, dict) and data.get("error"):
+                        if _transient(str(data["error"])) and attempt < 3:
+                            await _backoff(attempt)
+                            continue
+                        log.warning("curve listener: RPC %s error: %s", method, data["error"])
+                        return None
+                    return data.get("result")
+            except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
+                if attempt < 3:
+                    await _backoff(attempt)
+                    continue
+                log.warning("curve listener: RPC %s failed: %s", method, exc)
+                return None
+        return None
 
     async def _block_number(self) -> Optional[int]:
         res = await self._rpc("eth_blockNumber", [])

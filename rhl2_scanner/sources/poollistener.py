@@ -20,6 +20,7 @@ safely with DexScreener discovery.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Optional
 
@@ -30,6 +31,20 @@ from ..keccak import event_topic
 from ..models import TokenSnapshot
 
 log = logging.getLogger("rhl2.poollistener")
+
+_TRANSIENT_MARKERS = ("deadline", "timeout", "timed out", "too many", "rate",
+                      "429", "503", "504", "busy", "temporarily")
+
+
+def _transient(msg: str) -> bool:
+    """True if an RPC error looks transient (rate-limit / backend timeout)."""
+    m = (msg or "").lower()
+    return any(k in m for k in _TRANSIENT_MARKERS)
+
+
+async def _backoff(attempt: int) -> None:
+    """Exponential backoff with a small cap: 0.4s, 0.8s, 1.6s, …"""
+    await asyncio.sleep(min(2.0, 0.4 * (2 ** attempt)))
 
 PAIR_CREATED_TOPIC = event_topic("PairCreated(address,address,address,uint256)")
 POOL_CREATED_TOPIC = event_topic("PoolCreated(address,address,uint24,int24,address)")
@@ -166,22 +181,33 @@ class PoolListener:
         assert self._session is not None
         self._rpc_id += 1
         payload = {"jsonrpc": "2.0", "id": self._rpc_id, "method": method, "params": params}
-        try:
-            async with self._session.post(self.chain.rpc_url, json=payload) as resp:
-                if resp.status != 200:
-                    log.warning("pool listener: RPC %s HTTP %s", method, resp.status)
-                    return None
-                data = await resp.json()
-                if isinstance(data, dict) and data.get("error"):
-                    # e.g. public RPCs often reject eth_getLogs ("query returned
-                    # more than N results" / "method not supported") — this is
-                    # why block-zero detection may silently find nothing.
-                    log.warning("pool listener: RPC %s error: %s", method, data["error"])
-                    return None
-                return data.get("result")
-        except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
-            log.warning("pool listener: RPC %s failed: %s", method, exc)
-            return None
+        # The public RH RPC rate-limits (HTTP 429) and its backend nodes time out
+        # ("context deadline exceeded") under load. Retry transient failures with
+        # backoff so discovery isn't silently dropped for a cycle.
+        for attempt in range(4):
+            try:
+                async with self._session.post(self.chain.rpc_url, json=payload) as resp:
+                    if resp.status in (429, 503, 504):
+                        await _backoff(attempt)
+                        continue
+                    if resp.status != 200:
+                        log.warning("pool listener: RPC %s HTTP %s", method, resp.status)
+                        return None
+                    data = await resp.json()
+                    if isinstance(data, dict) and data.get("error"):
+                        if _transient(str(data["error"])) and attempt < 3:
+                            await _backoff(attempt)
+                            continue
+                        log.warning("pool listener: RPC %s error: %s", method, data["error"])
+                        return None
+                    return data.get("result")
+            except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
+                if attempt < 3:
+                    await _backoff(attempt)
+                    continue
+                log.warning("pool listener: RPC %s failed: %s", method, exc)
+                return None
+        return None
 
     async def _block_number(self) -> Optional[int]:
         res = await self._rpc("eth_blockNumber", [])

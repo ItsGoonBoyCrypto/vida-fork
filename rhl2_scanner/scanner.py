@@ -261,18 +261,40 @@ class Scanner:
         if not rpc:
             return "\n".join(lines + ["RPC url is not set — set RHL2_RPC_URL."])
 
+        from .sources.poollistener import _backoff, _transient
+        transient_hits = {"n": 0}
+
         async def _rpc(method, params):
             payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-            try:
-                async with self._session.post(rpc, json=payload) as r:
-                    if r.status != 200:
-                        return None, f"HTTP {r.status}"
-                    data = await r.json()
-                    if isinstance(data, dict) and data.get("error"):
-                        return None, str(data["error"])
-                    return data.get("result"), None
-            except Exception as exc:  # noqa: BLE001 — report any failure verbatim
-                return None, f"{type(exc).__name__}: {exc}"
+            # Retry transient rate-limits/timeouts so the diag doesn't self-
+            # inflict 429s from back-to-back getLogs calls.
+            for attempt in range(4):
+                try:
+                    async with self._session.post(rpc, json=payload) as r:
+                        if r.status in (429, 503, 504):
+                            transient_hits["n"] += 1
+                            if attempt < 3:
+                                await _backoff(attempt)
+                                continue
+                            return None, f"HTTP {r.status} (rate-limited)"
+                        if r.status != 200:
+                            return None, f"HTTP {r.status}"
+                        data = await r.json()
+                        if isinstance(data, dict) and data.get("error"):
+                            msg = str(data["error"])
+                            if _transient(msg):
+                                transient_hits["n"] += 1
+                                if attempt < 3:
+                                    await _backoff(attempt)
+                                    continue
+                            return None, msg
+                        return data.get("result"), None
+                except Exception as exc:  # noqa: BLE001
+                    if attempt < 3:
+                        await _backoff(attempt)
+                        continue
+                    return None, f"{type(exc).__name__}: {exc}"
+            return None, "exhausted retries"
 
         # 1) reachability + chain id
         cid, err = await _rpc("eth_chainId", [])
@@ -377,6 +399,12 @@ class Scanner:
                          "The pool listener needs dex_factory_address — make sure the "
                          "run command has --config rhl2_scanner/config/robinhood.example.yaml "
                          "(or set RHL2_DEX_FACTORY).")
+        elif method_ok and _is_addr and transient_hits["n"]:
+            lines.append("VERDICT: ⚠️ getLogs WORKS and the address is valid — the public RH "
+                         "RPC is just RATE-LIMITING (429 / backend timeouts) under load. The "
+                         "listeners now retry with backoff so discovery keeps working, but for "
+                         "rock-solid block-zero catching set RHL2_RPC_URL to a dedicated RH "
+                         "Chain RPC (higher rate limits).")
         elif method_ok:
             lines.append("VERDICT: ⚠️ getLogs works but the factory address was rejected. "
                          "Fix dex_factory_address / RHL2_DEX_FACTORY (see the error above).")
