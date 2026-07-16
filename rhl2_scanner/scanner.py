@@ -23,7 +23,13 @@ import aiohttp
 
 from .bundle import BundleAnalyzer
 from .config import Config
-from .filters import is_blocked_symbol, is_stock_token, quick_start_gate, safety_gate
+from .filters import (
+    _norm_symbol,
+    is_blocked_symbol,
+    is_stock_token,
+    quick_start_gate,
+    safety_gate,
+)
 from .models import AlertLevel, RiskTier, ScoreResult, TokenSnapshot
 from .paper import PaperTrader
 from .scoring import score_token
@@ -34,7 +40,7 @@ from .sources.launchpad_curve import LaunchpadCurveListener
 from .sources.safety import CompositeSafetySource
 from .sources.smartmoney import SmartMoneyClient
 from .storage import Storage
-from .walletwatch import WalletWatcher, format_whale_html
+from .walletwatch import WalletWatcher, format_cluster_html, format_whale_html
 from .alerting.formatter import format_early_launch_html
 from .alerting.telegram import TelegramNotifier
 
@@ -647,11 +653,36 @@ class Scanner:
         except Exception:
             log.exception("wallet watch poll failed")
             return
+        smart_set = {w.lower() for w in self.cfg.smart_money_wallets}
+        blocked = self._blocked_symbols()
         for ev in events:
             if self.storage.is_muted(ev.token_address):
                 continue   # /zero'd token
+            if blocked and _norm_symbol(ev.symbol) in set(blocked):
+                continue   # scam-impersonator symbol
             await self._send_html(format_whale_html(ev))
             log.info("WHALE %s %s $%s by %s", ev.side, ev.symbol, ev.usd, ev.label)
+            # Smart-money cluster: record buys by smart wallets, alert on convergence.
+            if ev.side == "buy" and ev.wallet.lower() in smart_set:
+                await self._check_cluster(ev)
+
+    async def _check_cluster(self, ev) -> None:
+        """Fire a high-priority alert when N smart wallets converge on a token."""
+        rc = self.cfg.runtime
+        if not rc.smart_cluster_enabled:
+            return
+        token = ev.token_address
+        self.storage.record_smart_buy(token, ev.wallet)
+        if self.storage.cluster_already_alerted(token):
+            return
+        since = time.time() - rc.smart_cluster_window_hours * 3600.0
+        buyers = self.storage.distinct_smart_buyers(token, since)
+        if len(buyers) < rc.smart_cluster_min_wallets:
+            return
+        labels = [self.cfg.wallet_watch.labels.get(w, w[:6] + "…" + w[-4:]) for w in buyers]
+        await self._send_html(format_cluster_html(ev.symbol, token, labels, ev.chart_url))
+        self.storage.mark_cluster_alert(token, len(buyers))
+        log.info("CLUSTER %s %d smart wallets in $%s", token, len(buyers), ev.symbol)
 
     async def _send_startup_message(self) -> None:
         """Post a 'scanner online' message on boot (also a Telegram wiring test)."""

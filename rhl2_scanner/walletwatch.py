@@ -175,6 +175,22 @@ def _short(addr: str) -> str:
     return f"{addr[:6]}…{addr[-4:]}" if addr and len(addr) > 12 else addr
 
 
+def format_cluster_html(symbol: str, token: str, labels: list[str],
+                        chart_url: str = "") -> str:
+    """High-priority alert: multiple smart-money wallets bought the same token."""
+    from html import escape
+    who = ", ".join(escape(x) for x in labels)
+    lines = [
+        f"🧠🚨 <b>SMART MONEY CLUSTER</b> — {len(labels)} wallets in ${escape(symbol or '???')}",
+        f"Buyers: {who}",
+        f"CA: <code>{escape(token)}</code>",
+        "<i>Multiple proven-early wallets converging — strongest early signal.</i>",
+    ]
+    if chart_url:
+        lines.append(f'<a href="{escape(chart_url)}">Chart</a>')
+    return "\n".join(lines)
+
+
 def format_whale_html(e: WhaleEvent) -> str:
     from html import escape
     emoji = "🐋🟢" if e.side == "buy" else "🐋🔴"

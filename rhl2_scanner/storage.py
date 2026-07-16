@@ -87,6 +87,20 @@ CREATE TABLE IF NOT EXISTS blocked_symbols (
     symbol  TEXT PRIMARY KEY,   -- normalised (uppercase, alnum) blocked ticker
     ts      REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS smart_buys (
+    token   TEXT NOT NULL,      -- lowercased token address
+    wallet  TEXT NOT NULL,      -- lowercased smart-money wallet that bought it
+    ts      REAL NOT NULL,
+    PRIMARY KEY (token, wallet)  -- one row per (token, wallet); ts = first buy
+);
+CREATE INDEX IF NOT EXISTS idx_smart_buys_token ON smart_buys(token);
+
+CREATE TABLE IF NOT EXISTS cluster_alerts (
+    token   TEXT PRIMARY KEY,   -- token we already fired a cluster alert for
+    ts      REAL NOT NULL,
+    n       INTEGER             -- distinct buyers at alert time
+);
 """
 
 
@@ -346,6 +360,36 @@ class Storage:
     def blocked_symbols(self) -> list[str]:
         cur = self._conn.execute("SELECT symbol FROM blocked_symbols ORDER BY symbol")
         return [r["symbol"] for r in cur.fetchall()]
+
+    # -- smart-money cluster tracking -----------------------------------
+
+    def record_smart_buy(self, token: str, wallet: str) -> None:
+        """Record that a smart wallet bought a token (first buy timestamp kept)."""
+        self._conn.execute(
+            "INSERT OR IGNORE INTO smart_buys (token, wallet, ts) VALUES (?, ?, ?)",
+            (token.lower(), wallet.lower(), time.time()),
+        )
+        self._conn.commit()
+
+    def distinct_smart_buyers(self, token: str, since_ts: float) -> list[str]:
+        """Distinct smart wallets that bought ``token`` at/after ``since_ts``."""
+        cur = self._conn.execute(
+            "SELECT wallet FROM smart_buys WHERE token = ? AND ts >= ? ORDER BY ts",
+            (token.lower(), since_ts),
+        )
+        return [r["wallet"] for r in cur.fetchall()]
+
+    def cluster_already_alerted(self, token: str) -> bool:
+        cur = self._conn.execute(
+            "SELECT 1 FROM cluster_alerts WHERE token = ?", (token.lower(),))
+        return cur.fetchone() is not None
+
+    def mark_cluster_alert(self, token: str, n: int) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO cluster_alerts (token, ts, n) VALUES (?, ?, ?)",
+            (token.lower(), time.time(), n),
+        )
+        self._conn.commit()
 
     def kv_get(self, key: str) -> Optional[str]:
         cur = self._conn.execute("SELECT v FROM kv WHERE k = ?", (key,))

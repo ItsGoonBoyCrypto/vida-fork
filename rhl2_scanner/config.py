@@ -302,6 +302,15 @@ class RuntimeConfig:
     smart_money_autoseed_buyers: int = 12      # earliest buyers to harvest per winner
     smart_money_max_set: int = 500             # cap the auto-grown set
 
+    # --- Smart-money CLUSTER alert ---
+    # When this many DISTINCT smart-money wallets buy the same token within the
+    # window, fire a high-priority "cluster" alert — convergence of proven early
+    # wallets is the strongest early-runner signal we have. Bypasses the score
+    # gate (it IS the signal), but still respects mutes + blocked symbols.
+    smart_cluster_enabled: bool = True
+    smart_cluster_min_wallets: int = 2
+    smart_cluster_window_hours: float = 6.0
+
     # --- Early-launch alerts (catch runners pre/just-after graduation) ---
     # Fresh tokens have few holders + concentrated supply + little volume, so
     # they can't reach the maturity-based score. This path alerts on a SAFE,
