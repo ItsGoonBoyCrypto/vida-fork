@@ -59,6 +59,9 @@ class Scanner:
         self._last_digest_ts: Optional[float] = None
         self._wallet_watcher = None  # bound to the shared session in run_once
         self._cmd_offset = None      # Telegram getUpdates offset (loaded from db)
+        # Merge any persisted smart-money wallets (from prior /smart or autoseed)
+        # into the config set so they take effect this run.
+        self._merge_persisted_smart_wallets()
 
     # -- lifecycle -------------------------------------------------------
 
@@ -311,6 +314,33 @@ class Scanner:
                 await self._send_html("<pre>" + _esc(report) + "</pre>")
             except Exception as exc:
                 await self._send_html("diag failed: " + __import__("html").escape(str(exc)))
+        elif cmd == "smart":
+            if not valid_ca:
+                await self._send_html("Usage: <code>/smart 0x&lt;wallet&gt;</code>")
+                return
+            new = self._add_smart_wallet(arg, source="manual")
+            n = len(self.storage.smart_wallets())
+            verb = "Added" if new else "Already tracking"
+            await self._send_html(f"🧠 {verb} <code>{arg}</code> — {n} smart wallets.")
+        elif cmd in ("unsmart", "unsmartwallet"):
+            if not valid_ca:
+                await self._send_html("Usage: <code>/unsmart 0x&lt;wallet&gt;</code>")
+                return
+            self.storage.remove_smart_wallet(arg)
+            if arg in self.cfg.smart_money_wallets:
+                self.cfg.smart_money_wallets.remove(arg)
+            await self._send_html(f"🧠 Removed <code>{arg}</code>.")
+        elif cmd in ("smartlist", "smarts"):
+            rows = self.storage.smart_wallets_detailed()
+            if not rows:
+                await self._send_html("🧠 No smart-money wallets tracked yet.")
+                return
+            lines = [f"🧠 Smart-money wallets ({len(rows)}):"]
+            for r in rows[:40]:
+                src = r["source"] or "manual"
+                tag = f" · {r['note']}" if r["note"] else ""
+                lines.append(f"<code>{r['wallet']}</code> ({src}{tag})")
+            await self._send_html("\n".join(lines))
 
     async def _poll_wallets(self) -> None:
         if not self.cfg.wallet_watch.enabled or not self.cfg.wallet_watch.wallets:
@@ -546,6 +576,10 @@ class Scanner:
             await self.notifier.send(snap, result, note=note)
             tag = "UPGRADE" if escalated else "ALERT"
             log.info("%s %s %s score=%.0f", tag, result.level.value, snap.symbol, result.composite)
+        # A token reaching STRONG for the first time is a confirmed runner —
+        # harvest its earliest buyers into the smart-money set (if enabled).
+        if tier == 2 and prev < 2:
+            await self._maybe_autoseed(snap)
         self.storage.record_alert(snap, result, rank=tier)
         return result
 
@@ -554,6 +588,50 @@ class Scanner:
         """Header line for an upgrade re-alert (early -> watch -> strong)."""
         names = {0: "🌱 Early", 1: "👀 Watch", 2: "🚨 Strong"}
         return f"🔼 <b>UPGRADED</b> {names.get(prev, '?')} → {names.get(tier, '?')}"
+
+    # -- smart-money seeding --------------------------------------------
+
+    def _merge_persisted_smart_wallets(self) -> None:
+        persisted = self.storage.smart_wallets()
+        if not persisted:
+            return
+        merged = list(dict.fromkeys([w.lower() for w in self.cfg.smart_money_wallets] + persisted))
+        self.cfg.smart_money_wallets = merged
+
+    def _add_smart_wallet(self, addr: str, source: str = "manual", note: str = "") -> bool:
+        """Persist + activate a smart-money wallet. Returns True if newly added."""
+        addr = addr.lower()
+        new = self.storage.add_smart_wallet(addr, source=source, note=note)
+        if addr not in self.cfg.smart_money_wallets:
+            self.cfg.smart_money_wallets.append(addr)
+        return new
+
+    async def _maybe_autoseed(self, snap: TokenSnapshot) -> None:
+        """Harvest a confirmed winner's earliest buyers into the smart set.
+
+        Called when a token reaches a STRONG alert. Those wallets bought a runner
+        early — exactly the signal we want to weight on future launches. Gated by
+        smart_money_autoseed and capped by smart_money_max_set.
+        """
+        rc = self.cfg.runtime
+        if not rc.smart_money_autoseed or self._session is None:
+            return
+        if len(self.storage.smart_wallets()) >= rc.smart_money_max_set:
+            return
+        try:
+            smart = SmartMoneyClient(self.cfg, session=self._session)
+            buyers = await smart.early_buyers(snap.token_address, rc.smart_money_autoseed_buyers)
+        except Exception:
+            log.debug("autoseed early_buyers failed", exc_info=True)
+            return
+        added = 0
+        for w in buyers:
+            if self._add_smart_wallet(w, source=f"auto:{snap.token_address.lower()}",
+                                      note=f"${snap.symbol}"):
+                added += 1
+        if added:
+            log.info("autoseed: harvested %d early buyers of $%s (winner) into smart set",
+                     added, snap.symbol)
 
     def _is_early_launch(self, snap: TokenSnapshot, result: ScoreResult) -> bool:
         """A fresh, SAFE launch worth an early-entry ping even below the score band.

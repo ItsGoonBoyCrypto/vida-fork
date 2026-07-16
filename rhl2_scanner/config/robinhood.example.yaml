@@ -139,6 +139,13 @@ telegram:
   alert_chat_id: ""                # env TELEGRAM_ALERT_CHAT_ID
   admin_user_ids: []
 
+# Smart-money seed set: wallets that bought previous bangers early. A token
+# these wallets buy scores higher (discovery), and — with autoseed on — a token
+# that graduates to a STRONG alert donates its earliest buyers back into the set
+# (self-improving). Manage live with /smart 0x.., /unsmart 0x.., /smartlist.
+#   Seed durably:  RHL2_SMART_WALLETS = 0xabc..,0xdef..   (env survives redeploys)
+#   Auto-grow:     RHL2_SMART_AUTOSEED = 1  (turn on once /diag shows the explorer
+#                  transfer feed works, else it can't read buyers)
 smart_money_wallets: []
 
 # Whale / smart-money wallet activity alerts (independent of the gem scan).

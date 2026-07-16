@@ -75,6 +75,13 @@ CREATE TABLE IF NOT EXISTS kv (
     k  TEXT PRIMARY KEY,
     v  TEXT
 );
+
+CREATE TABLE IF NOT EXISTS smart_wallets (
+    wallet  TEXT PRIMARY KEY,   -- lowercased address; a curated "smart money" wallet
+    ts      REAL NOT NULL,
+    source  TEXT,               -- "manual" | "auto:<token>" (harvested from a winner)
+    note    TEXT
+);
 """
 
 
@@ -289,6 +296,34 @@ class Storage:
     def muted_tokens(self) -> list[str]:
         cur = self._conn.execute("SELECT token FROM muted_tokens ORDER BY ts DESC")
         return [r["token"] for r in cur.fetchall()]
+
+    # -- smart-money wallet set (seeding) -------------------------------
+
+    def add_smart_wallet(self, wallet: str, source: str = "manual",
+                         note: str = "") -> bool:
+        """Add a curated smart-money wallet. Returns True if newly added."""
+        w = wallet.lower()
+        cur = self._conn.execute("SELECT 1 FROM smart_wallets WHERE wallet = ?", (w,))
+        existed = cur.fetchone() is not None
+        self._conn.execute(
+            "INSERT OR IGNORE INTO smart_wallets (wallet, ts, source, note) VALUES (?, ?, ?, ?)",
+            (w, time.time(), source, note),
+        )
+        self._conn.commit()
+        return not existed
+
+    def remove_smart_wallet(self, wallet: str) -> None:
+        self._conn.execute("DELETE FROM smart_wallets WHERE wallet = ?", (wallet.lower(),))
+        self._conn.commit()
+
+    def smart_wallets(self) -> list[str]:
+        cur = self._conn.execute("SELECT wallet FROM smart_wallets ORDER BY ts DESC")
+        return [r["wallet"] for r in cur.fetchall()]
+
+    def smart_wallets_detailed(self) -> list[sqlite3.Row]:
+        cur = self._conn.execute(
+            "SELECT wallet, source, note, ts FROM smart_wallets ORDER BY ts DESC")
+        return cur.fetchall()
 
     def kv_get(self, key: str) -> Optional[str]:
         cur = self._conn.execute("SELECT v FROM kv WHERE k = ?", (key,))

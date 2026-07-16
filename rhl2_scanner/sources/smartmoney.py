@@ -1,13 +1,18 @@
-"""Smart-money source: match a curated wallet list against token buyers.
+"""Smart-money source: match a curated wallet set against a token's buyers,
+and harvest the earliest buyers of confirmed winners back into that set.
 
-Maintain a curated list of high-win-rate wallets (config
-``smart_money_wallets`` or a newline file). This source checks which of them
-appear among a token's recent buyers/holders.
+Two jobs:
+  * ``active_wallets(snap)`` — which curated wallets appear among the token's
+    buyers (incoming transfers). Populates ``snap.smart_money_wallets`` which
+    the discovery scorer rewards.
+  * ``early_buyers(token, n)`` — the first ``n`` distinct non-infra receivers of
+    a token, used to auto-seed the smart set from a token that became a runner
+    ("wallets that bought previous bangers early").
 
-The real check needs token-transfer history (explorer `tokentx` for the
-token, filtered to the curated set, incoming transfers = holders/buyers).
-That call is implemented here against the Etherscan-style explorer; if the
-explorer isn't configured it returns an empty list (no false positives).
+Both read the explorer. Blockscout (RH Chain's explorer) does NOT serve the
+Etherscan ``account/tokentx`` action reliably, so we prefer the Blockscout v2
+``/tokens/{addr}/transfers`` feed and fall back to the Etherscan-style call for
+other explorers. No explorer configured => empty (no false positives).
 """
 
 from __future__ import annotations
@@ -18,6 +23,26 @@ import aiohttp
 
 from ..config import Config
 from ..models import TokenSnapshot
+
+
+def _infra_addresses(cfg: Config) -> set[str]:
+    ch = cfg.chain
+    infra = {
+        (ch.weth_address or "").lower(),
+        (ch.dex_factory_address or "").lower(),
+        (ch.dex_router_address or "").lower(),
+        (ch.nft_position_manager or "").lower(),
+        "0x0000000000000000000000000000000000000000",
+        "0x000000000000000000000000000000000000dead",
+    }
+    for lp in (ch.launchpads or []):
+        if isinstance(lp, dict) and lp.get("manager"):
+            infra.add(str(lp["manager"]).lower())
+    for a in (ch.launchpad_factory_addresses or []):
+        if a:
+            infra.add(str(a).lower())
+    infra.discard("")
+    return infra
 
 
 class SmartMoneyClient:
@@ -37,41 +62,101 @@ class SmartMoneyClient:
         if self._owns_session and self._session is not None:
             await self._session.close()
 
-    async def active_wallets(self, snap: TokenSnapshot) -> list[str]:
-        if not self.wallets:
-            return []
-        explorer = self.cfg.chain.explorer_api_url
-        if not explorer or self._session is None:
-            return []
+    # -- explorer helpers -----------------------------------------------
 
+    def _v2_base(self) -> str:
+        base = (self.cfg.chain.explorer_api_url or "").rstrip("/")
+        if not base:
+            return ""
+        return base + "/v2" if base.endswith("/api") else base
+
+    async def _get(self, url: str, params: Optional[dict] = None):
+        if self._session is None:
+            return None
+        try:
+            async with self._session.get(url, params=params or {}) as resp:
+                if resp.status != 200:
+                    return None
+                return await resp.json()
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            return None
+
+    async def _v2_receivers(self, token: str, max_pages: int = 3) -> list[str]:
+        """Receiver addresses from Blockscout v2 token transfers (newest-first).
+
+        Returns them oldest-last (as the feed gives them); callers that want the
+        earliest reverse the list. Follows next_page_params up to ``max_pages``.
+        """
+        base = self._v2_base()
+        if not base:
+            return []
+        out: list[str] = []
+        params: dict[str, Any] = {}
+        for _ in range(max_pages):
+            data = await self._get(f"{base}/tokens/{token}/transfers", params)
+            if not isinstance(data, dict):
+                break
+            items = data.get("items")
+            if not isinstance(items, list):
+                break
+            for tx in items:
+                to = tx.get("to")
+                addr = (to.get("hash") if isinstance(to, dict) else to) or ""
+                if addr:
+                    out.append(addr.lower())
+            nxt = data.get("next_page_params")
+            if not nxt:
+                break
+            params = nxt
+        return out
+
+    async def _etherscan_receivers(self, token: str, sort: str = "asc") -> list[str]:
+        """Etherscan-style tokentx fallback (non-Blockscout explorers)."""
+        explorer = self.cfg.chain.explorer_api_url
+        if not explorer:
+            return []
         params: dict[str, Any] = {
-            "module": "account",
-            "action": "tokentx",
-            "contractaddress": snap.token_address,
-            "page": 1,
-            "offset": 1000,
-            "sort": "asc",
+            "module": "account", "action": "tokentx",
+            "contractaddress": token, "page": 1, "offset": 1000, "sort": sort,
         }
         if self.cfg.chain.explorer_api_key:
             params["apikey"] = self.cfg.chain.explorer_api_key
-
-        try:
-            async with self._session.get(explorer, params=params) as resp:
-                if resp.status != 200:
-                    return []
-                data = await resp.json()
-        except (aiohttp.ClientError, TimeoutError):
-            return []
-
-        result = data.get("result")
+        data = await self._get(explorer, params)
+        result = data.get("result") if isinstance(data, dict) else None
         if not isinstance(result, list):
             return []
+        return [(tx.get("to") or "").lower() for tx in result if tx.get("to")]
 
-        seen: set[str] = set()
-        for tx in result:
-            # Incoming transfer to a curated wallet = it acquired the token.
-            to_addr = (tx.get("to") or "").lower()
-            if to_addr in self.wallets:
-                seen.add(to_addr)
-        snap.smart_money_wallets = sorted(seen)
+    # -- public API -----------------------------------------------------
+
+    async def active_wallets(self, snap: TokenSnapshot) -> list[str]:
+        """Curated wallets found among this token's buyers -> snap.smart_money."""
+        if not self.wallets:
+            return []
+        receivers = await self._v2_receivers(snap.token_address)
+        if not receivers:
+            receivers = await self._etherscan_receivers(snap.token_address, sort="desc")
+        seen = {r for r in receivers if r in self.wallets}
+        if seen:
+            snap.smart_money_wallets = sorted(seen)
         return snap.smart_money_wallets
+
+    async def early_buyers(self, token: str, n: int) -> list[str]:
+        """First ``n`` distinct non-infra receivers of ``token`` (earliest first).
+
+        Used to auto-seed the smart set from a confirmed winner. Prefers the
+        Etherscan asc feed (true earliest) then Blockscout v2 (reversed to
+        approximate earliest). Infra/dead/router addresses are excluded.
+        """
+        infra = _infra_addresses(self.cfg)
+        ordered = await self._etherscan_receivers(token, sort="asc")
+        if not ordered:
+            # v2 is newest-first; reverse so earliest come first.
+            ordered = list(reversed(await self._v2_receivers(token, max_pages=5)))
+        out: list[str] = []
+        for addr in ordered:
+            if addr and addr not in infra and addr not in out:
+                out.append(addr)
+                if len(out) >= n:
+                    break
+        return out

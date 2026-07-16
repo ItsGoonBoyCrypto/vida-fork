@@ -267,6 +267,15 @@ class RuntimeConfig:
     # confirm to size up" flow — catch it fresh, re-ping when confluence lands.
     realert_on_escalation: bool = True
 
+    # --- Smart-money auto-seeding ---
+    # When a token escalates to a STRONG alert (a confirmed runner), harvest its
+    # earliest N distinct buyers into the smart-money set, so future launches
+    # those wallets buy score higher. Off by default — turn on once the RH
+    # explorer's transfer feed is confirmed working (RHL2_SMART_AUTOSEED=1).
+    smart_money_autoseed: bool = False
+    smart_money_autoseed_buyers: int = 12      # earliest buyers to harvest per winner
+    smart_money_max_set: int = 500             # cap the auto-grown set
+
     # --- Early-launch alerts (catch runners pre/just-after graduation) ---
     # Fresh tokens have few holders + concentrated supply + little volume, so
     # they can't reach the maturity-based score. This path alerts on a SAFE,
@@ -435,6 +444,17 @@ class Config:
                 self.wallet_watch.min_usd = float(v)
             except ValueError:
                 pass
+        # Smart-money seed set — comma-separated 0x wallets that bought previous
+        # bangers early. A token bought by these scores higher (discovery) and,
+        # with autoseed on, a token that graduates to a STRONG alert donates its
+        # earliest buyers back into the set (self-improving). Durable on Railway
+        # (env survives redeploys; the DB does not).
+        if v := env.get("RHL2_SMART_WALLETS"):
+            seed = [w.strip().lower() for w in v.split(",") if w.strip()]
+            merged = list(dict.fromkeys(self.smart_money_wallets + seed))
+            self.smart_money_wallets = merged
+        if v := env.get("RHL2_SMART_AUTOSEED"):
+            self.runtime.smart_money_autoseed = v.lower() in ("1", "true", "yes")
         if v := env.get("TELEGRAM_BOT_TOKEN"):
             self.telegram.bot_token = v
         if v := env.get("TELEGRAM_ALERT_CHAT_ID"):
