@@ -76,11 +76,20 @@ class TestScoring(unittest.TestCase):
         # 1h volume 28k vs avg hourly 210k/24 ≈ 8.75k -> accelerating
         self.assertTrue(clean_token().volume_accelerating)
 
-    def test_unverified_contract_fails_gate_strict(self):
+    def test_verification_not_required_by_default(self):
+        # RH Chain rarely verifies contracts, so an unverified/unknown contract
+        # must NOT be hard-skipped by default (verification is a scoring bonus).
         r = score_token(clean_token(contract_verified=None), self.cfg, strict_safety=True)
-        self.assertFalse(r.safety_passed)
-        self.assertEqual(r.level, AlertLevel.SKIP)
-        self.assertEqual(r.composite, 0.0)
+        self.assertTrue(r.safety_passed)
+
+    def test_verification_gate_when_required(self):
+        self.cfg.thresholds.require_contract_verified = True
+        try:
+            r = score_token(clean_token(contract_verified=False), self.cfg, strict_safety=True)
+            self.assertFalse(r.safety_passed)
+            self.assertEqual(r.composite, 0.0)
+        finally:
+            self.cfg.thresholds.require_contract_verified = False
 
     def test_honeypot_hard_skip(self):
         r = score_token(clean_token(is_honeypot=True), self.cfg, strict_safety=True)

@@ -107,6 +107,9 @@ tiers:
       max_dev_holdings_pct: 10      # HARD skip if dev above 10%
       max_tax_pct: 1                # HARD skip if KNOWN tax above 1% each
       min_lp_lock_seconds: 0        # 0 = any lock duration accepted
+      require_contract_verified: false  # RH Chain barely verifies contracts —
+                                        # requiring it would zero legit tokens.
+                                        # Verified still earns +15 in scoring.
       ideal_mcap_low: 50000
       ideal_mcap_high: 400000
       ideal_holders: 300

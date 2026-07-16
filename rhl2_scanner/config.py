@@ -221,6 +221,12 @@ class Thresholds:
     max_tax_pct: float = 10.0                  # buy or sell tax ceiling
     min_external_risk_score: float = 60.0      # RugCheck-style 0-100
     min_lp_lock_seconds: int = 30 * 24 * 3600  # 30 days considered "meaningful"
+    # Require a Blockscout-verified contract to pass the safety gate. OFF on RH
+    # Chain: almost nothing is verified there, so requiring it zeroes legit
+    # tokens. Verification stays a SCORING bonus (+15); real safety comes from
+    # the honeypot sim + distribution + LP checks. Turn on for chains where
+    # verification is the norm.
+    require_contract_verified: bool = False
 
     # Momentum
     min_volume_24h_usd: float = 10_000

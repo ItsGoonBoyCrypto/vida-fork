@@ -120,7 +120,10 @@ def safety_gate(t: TokenSnapshot, th: Thresholds, strict: bool = True,
         fails.append(label if value is False else f"{label} (unconfirmed)")
 
     # --- Contract / code safety ---
-    require_true(s.contract_verified, "contract not verified")
+    # Verification is a hard gate only when configured (off for RH Chain, where
+    # verification is rare); otherwise it's just a scoring bonus.
+    if th.require_contract_verified:
+        require_true(s.contract_verified, "contract not verified")
     if s.is_honeypot is True:
         fails.append("honeypot detected")
     elif s.is_honeypot is None and strict and not tolerate_unknown:
