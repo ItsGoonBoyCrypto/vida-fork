@@ -101,5 +101,34 @@ class TestClusterFormat(unittest.TestCase):
         self.assertIn(TOKEN, html)
 
 
+class TestSybilGrouping(unittest.IsolatedAsyncioTestCase):
+    def _sc(self) -> Scanner:
+        cfg = Config()
+        cfg.runtime.db_path = ":memory:"
+        cfg.smart_money_wallets = [W1, W2, W3]
+        cfg.runtime.smart_cluster_min_wallets = 2
+        # W1 and W2 are the same person -> one entity.
+        cfg.wallet_watch.wallet_groups = {W1.lower(): "SybilA", W2.lower(): "SybilA"}
+        sc = Scanner(cfg)
+        sc._sent = []
+        async def fake_send(html):
+            sc._sent.append(html)
+        sc._send_html = fake_send  # type: ignore
+        return sc
+
+    async def test_grouped_pair_does_not_cluster(self):
+        sc = self._sc()
+        try:
+            await sc._check_cluster(_ev(W1))
+            await sc._check_cluster(_ev(W2))   # same entity -> still 1
+            self.assertEqual(sc._sent, [])
+            # a genuinely distinct wallet tips it to 2 entities -> fire
+            await sc._check_cluster(_ev(W3))
+            self.assertEqual(len(sc._sent), 1)
+            self.assertIn("SMART MONEY CLUSTER", sc._sent[0])
+        finally:
+            sc.storage.close()
+
+
 if __name__ == "__main__":
     unittest.main()

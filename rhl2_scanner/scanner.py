@@ -748,8 +748,16 @@ class Scanner:
             if ev.side == "buy" and ev.wallet.lower() in smart_set:
                 await self._check_cluster(ev)
 
+    def _entity_of(self, addr: str) -> str:
+        """Resolve a wallet to its sybil-group entity (or itself if ungrouped)."""
+        return self.cfg.wallet_watch.wallet_groups.get(addr.lower(), addr.lower())
+
     async def _check_cluster(self, ev) -> None:
-        """Fire a high-priority alert when N smart wallets converge on a token."""
+        """Fire a high-priority alert when N distinct ENTITIES converge on a token.
+
+        Wallets grouped as one sybil entity count once, so a person running two
+        wallets can't fake a convergence.
+        """
         rc = self.cfg.runtime
         if not rc.smart_cluster_enabled:
             return
@@ -759,12 +767,20 @@ class Scanner:
             return
         since = time.time() - rc.smart_cluster_window_hours * 3600.0
         buyers = self.storage.distinct_smart_buyers(token, since)
-        if len(buyers) < rc.smart_cluster_min_wallets:
+        # Collapse wallets to entities: one display label per distinct entity.
+        reps: dict[str, str] = {}
+        for w in buyers:
+            ent = self._entity_of(w)
+            if ent in reps:
+                continue
+            reps[ent] = ent if ent != w.lower() else \
+                self.cfg.wallet_watch.labels.get(w, w[:6] + "…" + w[-4:])
+        if len(reps) < rc.smart_cluster_min_wallets:
             return
-        labels = [self.cfg.wallet_watch.labels.get(w, w[:6] + "…" + w[-4:]) for w in buyers]
+        labels = list(reps.values())
         await self._send_html(format_cluster_html(ev.symbol, token, labels, ev.chart_url))
-        self.storage.mark_cluster_alert(token, len(buyers))
-        log.info("CLUSTER %s %d smart wallets in $%s", token, len(buyers), ev.symbol)
+        self.storage.mark_cluster_alert(token, len(reps))
+        log.info("CLUSTER %s %d entities in $%s", token, len(reps), ev.symbol)
 
     async def _send_startup_message(self) -> None:
         """Post a 'scanner online' message on boot (also a Telegram wiring test)."""

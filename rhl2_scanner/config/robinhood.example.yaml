@@ -203,6 +203,13 @@ wallet_watch:
   alert_on: "buys"             # only track buys (we no longer ping on exits)
   min_usd: 100                 # ignore transfers below this USD value
   max_transfers_per_wallet: 25
+  # Sybil groups: wallets run by the SAME person count as one buyer for the
+  # cluster signal. Early 10 & 13 are the same actor — grouped so their joint
+  # buys don't fake a 2-wallet convergence. Add more addr->group pairs as you
+  # spot them.
+  wallet_groups:
+    "0x8e65cbcdc822968131b1e37e5cee02c9ce82ab21": "Early 10/13"
+    "0x3b1f57028e5bc1f28c7201b1f6bd913e46b64e62": "Early 10/13"
   # No individual "🐋 whale bought X" pings — instead their buys feed the
   # smart-money cluster signal + gem scoring. Cluster convergence alerts stay on.
   # Flip back on with RHL2_WHALE_ALERTS=1 if you want the per-buy pings again.

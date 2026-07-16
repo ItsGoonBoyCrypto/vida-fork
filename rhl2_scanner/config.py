@@ -354,6 +354,11 @@ class WalletWatchConfig:
     # without the per-buy notifications. (Cluster convergence alerts are separate
     # and stay on — that's the high-signal "increase our chances" part.)
     emit_alerts: bool = True
+    # Sybil grouping: map wallet address(lower) -> shared entity name. Wallets in
+    # the same group count as ONE distinct buyer for the cluster signal, so a
+    # person running two wallets can't fake a 2-wallet convergence. Ungrouped
+    # wallets are each their own entity.
+    wallet_groups: dict = field(default_factory=dict)
 
 
 @dataclass
