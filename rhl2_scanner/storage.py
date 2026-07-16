@@ -106,6 +106,11 @@ CREATE TABLE IF NOT EXISTS wallet_groups (
     wallet  TEXT PRIMARY KEY,   -- lowercased wallet address
     grp     TEXT NOT NULL       -- shared sybil-entity name
 );
+
+CREATE TABLE IF NOT EXISTS pos_events (
+    key  TEXT PRIMARY KEY,      -- one-shot follow-up alert key (token|kind[|wallet])
+    ts   REAL NOT NULL
+);
 """
 
 
@@ -420,6 +425,24 @@ class Storage:
     def wallet_groups(self) -> dict[str, str]:
         cur = self._conn.execute("SELECT wallet, grp FROM wallet_groups")
         return {r["wallet"]: r["grp"] for r in cur.fetchall()}
+
+    # -- one-shot follow-up alerts (milestone / dump / exit) ------------
+
+    def pos_event_new(self, key: str) -> bool:
+        """True if this follow-up alert hasn't fired yet (and marks it fired)."""
+        cur = self._conn.execute("SELECT 1 FROM pos_events WHERE key = ?", (key,))
+        if cur.fetchone() is not None:
+            return False
+        self._conn.execute("INSERT INTO pos_events (key, ts) VALUES (?, ?)",
+                           (key, time.time()))
+        self._conn.commit()
+        return True
+
+    def has_smart_buy(self, token: str) -> bool:
+        """True if any smart wallet is on record buying this token."""
+        cur = self._conn.execute(
+            "SELECT 1 FROM smart_buys WHERE token = ? LIMIT 1", (token.lower(),))
+        return cur.fetchone() is not None
 
     def kv_get(self, key: str) -> Optional[str]:
         cur = self._conn.execute("SELECT v FROM kv WHERE k = ?", (key,))

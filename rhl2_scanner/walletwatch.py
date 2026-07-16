@@ -191,6 +191,47 @@ def format_cluster_html(symbol: str, token: str, labels: list[str],
     return "\n".join(lines)
 
 
+def format_exit_html(symbol: str, token: str, label: str, usd, chart_url: str = "") -> str:
+    """Smart money is selling a token smart money had bought — exit signal."""
+    from html import escape
+    amt = f" (~${usd:,.0f})" if usd else ""
+    lines = [
+        f"🔴 <b>SMART MONEY EXIT</b> — {escape(label)} sold ${escape(symbol or '???')}{amt}",
+        f"CA: <code>{escape(token)}</code>",
+        "<i>A wallet that got in early is taking profit — consider trimming.</i>",
+    ]
+    if chart_url:
+        lines.append(f'<a href="{escape(chart_url)}">Chart</a>')
+    return "\n".join(lines)
+
+
+def format_milestone_html(symbol: str, token: str, mult: float, chart_url: str = "") -> str:
+    """An alerted token reached a multiple of its alert price."""
+    from html import escape
+    lines = [
+        f"📈 <b>${escape(symbol or '???')} hit {mult:g}x</b> from alert",
+        f"CA: <code>{escape(token)}</code>",
+    ]
+    if chart_url:
+        lines.append(f'<a href="{escape(chart_url)}">Chart</a>')
+    return "\n".join(lines)
+
+
+def format_dump_html(symbol: str, token: str, drawdown_pct: float, peak_mult: float,
+                     chart_url: str = "") -> str:
+    """An alerted token that ran up is now falling hard — rug/dump guard."""
+    from html import escape
+    lines = [
+        f"⚠️ <b>${escape(symbol or '???')} DUMPING</b> — −{drawdown_pct:.0f}% from peak "
+        f"(peaked {peak_mult:g}x)",
+        f"CA: <code>{escape(token)}</code>",
+        "<i>Sharp drop from the high — protect any position.</i>",
+    ]
+    if chart_url:
+        lines.append(f'<a href="{escape(chart_url)}">Chart</a>')
+    return "\n".join(lines)
+
+
 def format_whale_html(e: WhaleEvent) -> str:
     from html import escape
     emoji = "🐋🟢" if e.side == "buy" else "🐋🔴"

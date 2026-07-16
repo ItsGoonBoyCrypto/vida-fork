@@ -311,6 +311,17 @@ class RuntimeConfig:
     smart_cluster_min_wallets: int = 2
     smart_cluster_window_hours: float = 6.0
 
+    # --- Post-alert position monitoring (protect the position) ---
+    # Smart-money EXIT alert: a smart wallet sells a token smart money had bought.
+    smart_exit_enabled: bool = True
+    # Milestone pings: an alerted token reaching these multiples from entry.
+    position_monitor_enabled: bool = True
+    milestone_multiples: list = field(default_factory=lambda: [2.0, 5.0, 10.0])
+    # Dump/rug guard: warn once when an alerted token that ran up (>= this peak)
+    # falls back by this % from its peak.
+    dump_min_peak_mult: float = 1.5
+    dump_drawdown_pct: float = 55.0
+
     # --- Early-launch alerts (catch runners pre/just-after graduation) ---
     # Fresh tokens have few holders + concentrated supply + little volume, so
     # they can't reach the maturity-based score. This path alerts on a SAFE,

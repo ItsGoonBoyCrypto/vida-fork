@@ -200,7 +200,7 @@ wallet_watch:
     "0x8f47a238c7701247ee8469ddc37ac1df121cfcce": "Early 12"
     "0x3b1f57028e5bc1f28c7201b1f6bd913e46b64e62": "Early 13"
     "0x16f5ef133d0d15b196a778d22bf1ec56f8f37c05": "Early 14"
-  alert_on: "buys"             # only track buys (we no longer ping on exits)
+  alert_on: "buys_sells"       # classify buys AND sells (sells feed EXIT alerts)
   min_usd: 100                 # ignore transfers below this USD value
   max_transfers_per_wallet: 25
   # Sybil groups: wallets run by the SAME person count as one buyer for the
@@ -212,7 +212,7 @@ wallet_watch:
     "0x3b1f57028e5bc1f28c7201b1f6bd913e46b64e62": "Early 10/13"
     "0xe781b28e02ed5fc4b989905cb6848d318f4735fd": "Early 5/6"
     "0x5638484ba2d2f1d1d35020572b0aa439a9869192": "Early 5/6"
-  # No individual "🐋 whale bought X" pings — instead their buys feed the
-  # smart-money cluster signal + gem scoring. Cluster convergence alerts stay on.
-  # Flip back on with RHL2_WHALE_ALERTS=1 if you want the per-buy pings again.
+  # No individual "🐋 whale bought/sold X" pings — instead buys feed the cluster
+  # signal + gem scoring, and sells feed the 🔴 smart-money EXIT alert on tokens
+  # smart money bought. Flip the raw pings back on with RHL2_WHALE_ALERTS=1.
   emit_alerts: false

@@ -40,7 +40,14 @@ from .sources.launchpad_curve import LaunchpadCurveListener
 from .sources.safety import CompositeSafetySource
 from .sources.smartmoney import SmartMoneyClient
 from .storage import Storage
-from .walletwatch import WalletWatcher, format_cluster_html, format_whale_html
+from .walletwatch import (
+    WalletWatcher,
+    format_cluster_html,
+    format_dump_html,
+    format_exit_html,
+    format_milestone_html,
+    format_whale_html,
+)
 from .alerting.formatter import format_early_launch_html
 from .alerting.telegram import TelegramNotifier
 
@@ -357,6 +364,10 @@ class Scanner:
             f"cluster: {'on' if rc.smart_cluster_enabled else 'off'} "
             f"(≥{rc.smart_cluster_min_wallets} in {rc.smart_cluster_window_hours:g}h) | "
             f"whale pings: {'on' if self.cfg.wallet_watch.emit_alerts else 'off'}")
+        lines.append(
+            f"exits: {'on' if rc.smart_exit_enabled else 'off'} | "
+            f"milestones: {'/'.join(f'{m:g}x' for m in rc.milestone_multiples) if rc.position_monitor_enabled else 'off'} | "
+            f"dump guard: {('−%.0f%% from peak' % rc.dump_drawdown_pct) if rc.position_monitor_enabled else 'off'}")
 
         lines.append("")
         if method_ok and addr_ok:
@@ -639,7 +650,8 @@ class Scanner:
             "<code>/calibrate 0xCA1 0xCA2 …</code> — tune thresholds against your known winners",
             "",
             "<i>Alerts you'll get: 🚨 Gem / 👀 Watch / 🌱 Early · 🔼 Upgrades · "
-            "🧠🚨 Smart-money clusters.</i>",
+            "🧠🚨 Smart-money clusters · 📈 Milestones (Nx) · ⚠️ Dumps · "
+            "🔴 Smart-money exits.</i>",
         ])
 
     async def _handle_command(self, text: str) -> None:
@@ -835,6 +847,49 @@ class Scanner:
             # This runs regardless of emit_alerts — it's how we "use the data".
             if ev.side == "buy" and ev.wallet.lower() in smart_set:
                 await self._check_cluster(ev)
+            # Smart-money EXIT: a smart wallet selling a token smart money bought.
+            elif ev.side == "sell" and ev.wallet.lower() in smart_set:
+                await self._check_exit(ev)
+
+    async def _check_exit(self, ev) -> None:
+        """Alert when a smart wallet sells a token smart money had bought."""
+        if not self.cfg.runtime.smart_exit_enabled:
+            return
+        token = ev.token_address
+        if not self.storage.has_smart_buy(token):
+            return  # not a token we were tracking via smart-money buys
+        if not self.storage.pos_event_new(f"{token.lower()}|exit|{ev.wallet.lower()}"):
+            return  # already flagged this wallet's exit from this token
+        label = self.cfg.wallet_watch.labels.get(ev.wallet.lower(),
+                                                 ev.wallet[:6] + "…" + ev.wallet[-4:])
+        await self._send_html(format_exit_html(ev.symbol, token, label, ev.usd, ev.chart_url))
+        log.info("EXIT %s sold by %s", ev.symbol, label)
+
+    async def _monitor_positions(self, dex) -> None:
+        """After re-pricing, ping milestones (📈 Nx) and dumps (⚠️) on alerts."""
+        rc = self.cfg.runtime
+        if self.perf is None or not rc.position_monitor_enabled:
+            return
+        for row in self.storage.open_paper_trades():
+            entry = row["entry_price"]
+            last = row["last_price"]
+            peak = row["max_mult"] or 1.0
+            if not entry or not last:
+                continue
+            pair, token, sym = row["pair_address"], row["token_address"], row["symbol"]
+            cur = last / entry
+            chart = f"https://dexscreener.com/{self.cfg.chain.dexscreener_chain}/{pair}"
+            # Milestones (📈) — highest crossed only, one ping each.
+            for m in sorted(rc.milestone_multiples):
+                if cur >= m and self.storage.pos_event_new(f"{token}|x{m:g}"):
+                    await self._send_html(format_milestone_html(sym, token, m, chart))
+                    log.info("MILESTONE %s %gx", sym, m)
+            # Dump guard (⚠️) — ran up then fell back hard.
+            if peak >= rc.dump_min_peak_mult:
+                drawdown = (1.0 - (cur / peak)) * 100.0
+                if drawdown >= rc.dump_drawdown_pct and self.storage.pos_event_new(f"{token}|dump"):
+                    await self._send_html(format_dump_html(sym, token, drawdown, peak, chart))
+                    log.info("DUMP %s -%.0f%% from peak", sym, drawdown)
 
     def _entity_of(self, addr: str) -> str:
         """Resolve a wallet to its sybil-group entity (or itself if ungrouped).
@@ -1044,6 +1099,12 @@ class Scanner:
                         log.info("%s: settled %d positions this cycle", name, settled)
                 except Exception:
                     log.exception("%s settle failed", name)
+
+        # Follow-up alerts on tokens we alerted on: milestones (📈) + dumps (⚠️).
+        try:
+            await self._monitor_positions(dex)
+        except Exception:
+            log.exception("position monitor failed")
 
         return [r for r in results if isinstance(r, ScoreResult)]
 
