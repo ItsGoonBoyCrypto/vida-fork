@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS seen_tokens (
     first_seen     REAL NOT NULL,
     last_scored    REAL,
     last_alerted   REAL,
-    best_score     REAL DEFAULT 0
+    best_score     REAL DEFAULT 0,
+    best_alert_rank INTEGER DEFAULT -1
 );
 CREATE TABLE IF NOT EXISTS alerts (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,7 +84,15 @@ class Storage:
         self._conn = sqlite3.connect(path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Additive migrations for DBs created before a column existed."""
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(seen_tokens)")}
+        if "best_alert_rank" not in cols:
+            self._conn.execute(
+                "ALTER TABLE seen_tokens ADD COLUMN best_alert_rank INTEGER DEFAULT -1")
 
     def close(self) -> None:
         self._conn.close()
@@ -117,6 +126,21 @@ class Storage:
         last = self.last_alerted(pair_address)
         return last is not None and (time.time() - last) < cooldown_seconds
 
+    def alert_rank(self, pair_address: str) -> int:
+        """Highest alert tier this token has been alerted at (-1 = never).
+
+        Tiers: 0 = early launch, 1 = watch, 2 = strong. A later cycle reaching a
+        higher tier is an *escalation* — worth an immediate upgrade re-alert.
+        """
+        cur = self._conn.execute(
+            "SELECT best_alert_rank FROM seen_tokens WHERE pair_address = ?",
+            (pair_address.lower(),),
+        )
+        row = cur.fetchone()
+        if row is None or row["best_alert_rank"] is None:
+            return -1
+        return int(row["best_alert_rank"])
+
     # -- recording ------------------------------------------------------
 
     def record_score(self, snap: TokenSnapshot, result: ScoreResult) -> None:
@@ -128,7 +152,8 @@ class Storage:
         )
         self._conn.commit()
 
-    def record_alert(self, snap: TokenSnapshot, result: ScoreResult) -> None:
+    def record_alert(self, snap: TokenSnapshot, result: ScoreResult,
+                     rank: Optional[int] = None) -> None:
         now = time.time()
         breakdown = {
             c.name: {"raw": round(c.raw, 1), "reasons": c.reasons, "penalties": c.penalties}
@@ -147,10 +172,18 @@ class Storage:
                 json.dumps(breakdown),
             ),
         )
-        self._conn.execute(
-            "UPDATE seen_tokens SET last_alerted = ? WHERE pair_address = ?",
-            (now, snap.pair_address.lower()),
-        )
+        if rank is None:
+            self._conn.execute(
+                "UPDATE seen_tokens SET last_alerted = ? WHERE pair_address = ?",
+                (now, snap.pair_address.lower()),
+            )
+        else:
+            self._conn.execute(
+                """UPDATE seen_tokens
+                   SET last_alerted = ?, best_alert_rank = MAX(best_alert_rank, ?)
+                   WHERE pair_address = ?""",
+                (now, rank, snap.pair_address.lower()),
+            )
         self._conn.commit()
 
     # -- paper trading / calibration ------------------------------------

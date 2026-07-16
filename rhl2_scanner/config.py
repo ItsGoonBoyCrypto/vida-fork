@@ -261,6 +261,11 @@ class RuntimeConfig:
     log_level: str = "INFO"
     # Re-alert suppression: don't re-alert the same token within this window.
     realert_cooldown_seconds: float = 6 * 3600
+    # Tiered re-alerting: when a token ESCALATES to a higher tier than it was
+    # last alerted at (early 🌱 -> watch 👀 -> strong 🚨), send an "upgrade" ping
+    # immediately, bypassing the cooldown. This is the "get in early, then
+    # confirm to size up" flow — catch it fresh, re-ping when confluence lands.
+    realert_on_escalation: bool = True
 
     # --- Early-launch alerts (catch runners pre/just-after graduation) ---
     # Fresh tokens have few holders + concentrated supply + little volume, so

@@ -420,22 +420,48 @@ class Scanner:
         if self.storage.is_muted(snap.token_address):
             return result   # /zero'd — suppress all alerts for this token
 
-        if result.level in (AlertLevel.STRONG, AlertLevel.WATCH):
-            if self.storage.in_cooldown(snap.pair_address, self.cfg.runtime.realert_cooldown_seconds):
-                log.debug("%s in cooldown, skipping alert", snap.symbol)
-            else:
-                await self.notifier.send(snap, result)
-                self.storage.record_alert(snap, result)
-                log.info("ALERT %s %s score=%.0f", result.level.value, snap.symbol, result.composite)
+        # Determine this cycle's alert tier: strong(2) > watch(1) > early(0).
+        # A token that ESCALATES past the tier it was last alerted at gets an
+        # immediate "upgrade" ping that bypasses the cooldown (tiered re-alert).
+        if result.level == AlertLevel.STRONG:
+            tier = 2
+        elif result.level == AlertLevel.WATCH:
+            tier = 1
         elif self._is_early_launch(snap, result):
-            if not self.storage.in_cooldown(snap.pair_address, self.cfg.runtime.realert_cooldown_seconds):
-                await self._send_html(format_early_launch_html(snap, result))
-                self.storage.record_alert(snap, result)
-                log.info("EARLY %s age=%.0fm liq=%s", snap.symbol, snap.age_minutes or 0, snap.liquidity_usd)
+            tier = 0
         else:
             reasons = ", ".join(result.gate_failures[:3]) if result.gate_failures else "low score"
             log.debug("skip %s (%s)", snap.symbol, reasons)
+            return result
+
+        rc = self.cfg.runtime
+        prev = self.storage.alert_rank(snap.pair_address)
+        escalated = rc.realert_on_escalation and prev >= 0 and tier > prev
+        cooling = self.storage.in_cooldown(snap.pair_address, rc.realert_cooldown_seconds)
+
+        if not (prev < 0 or escalated or not cooling):
+            log.debug("%s in cooldown (tier=%d, prev=%d), skipping", snap.symbol, tier, prev)
+            return result
+
+        note = self._escalation_note(prev, tier) if escalated else ""
+        if tier == 0:
+            html = format_early_launch_html(snap, result)
+            if note:
+                html = note + "\n" + html
+            await self._send_html(html)
+            log.info("EARLY %s age=%.0fm liq=%s", snap.symbol, snap.age_minutes or 0, snap.liquidity_usd)
+        else:
+            await self.notifier.send(snap, result, note=note)
+            tag = "UPGRADE" if escalated else "ALERT"
+            log.info("%s %s %s score=%.0f", tag, result.level.value, snap.symbol, result.composite)
+        self.storage.record_alert(snap, result, rank=tier)
         return result
+
+    @staticmethod
+    def _escalation_note(prev: int, tier: int) -> str:
+        """Header line for an upgrade re-alert (early -> watch -> strong)."""
+        names = {0: "🌱 Early", 1: "👀 Watch", 2: "🚨 Strong"}
+        return f"🔼 <b>UPGRADED</b> {names.get(prev, '?')} → {names.get(tier, '?')}"
 
     def _is_early_launch(self, snap: TokenSnapshot, result: ScoreResult) -> bool:
         """A fresh, SAFE launch worth an early-entry ping even below the score band.

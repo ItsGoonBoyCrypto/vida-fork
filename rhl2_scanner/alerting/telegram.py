@@ -41,14 +41,16 @@ class TelegramNotifier:
         if self.enabled:
             self._app = Application.builder().token(cfg.telegram.bot_token).build()
 
-    async def send(self, snap: TokenSnapshot, result: ScoreResult) -> None:
+    async def send(self, snap: TokenSnapshot, result: ScoreResult,
+                   note: str = "") -> None:
+        prefix = (note + "\n") if note else ""
         if not self.enabled or self._app is None:
-            print("\n" + to_plain(snap, result) + "\n", flush=True)
+            print("\n" + (note + "\n" if note else "") + to_plain(snap, result) + "\n", flush=True)
             return
         try:
             await self._app.bot.send_message(
                 chat_id=self.cfg.telegram.alert_chat_id,
-                text=to_telegram_html(snap, result),
+                text=prefix + to_telegram_html(snap, result),
                 parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True,
             )
