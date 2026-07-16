@@ -156,10 +156,18 @@ class PoolListener:
         try:
             async with self._session.post(self.chain.rpc_url, json=payload) as resp:
                 if resp.status != 200:
+                    log.warning("pool listener: RPC %s HTTP %s", method, resp.status)
                     return None
                 data = await resp.json()
+                if isinstance(data, dict) and data.get("error"):
+                    # e.g. public RPCs often reject eth_getLogs ("query returned
+                    # more than N results" / "method not supported") — this is
+                    # why block-zero detection may silently find nothing.
+                    log.warning("pool listener: RPC %s error: %s", method, data["error"])
+                    return None
                 return data.get("result")
-        except (aiohttp.ClientError, TimeoutError, ValueError):
+        except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
+            log.warning("pool listener: RPC %s failed: %s", method, exc)
             return None
 
     async def _block_number(self) -> Optional[int]:
