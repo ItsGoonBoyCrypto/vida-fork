@@ -107,6 +107,13 @@ CREATE TABLE IF NOT EXISTS cluster_alerts (
 class Storage:
     def __init__(self, path: str):
         self.path = path
+        # Ensure the parent dir exists (e.g. a freshly-mounted Railway Volume at
+        # /app/data) so opening the DB file doesn't fail on first boot.
+        if path and path != ":memory:":
+            import os
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
         self._conn = sqlite3.connect(path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)

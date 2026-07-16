@@ -106,6 +106,20 @@ async def _wallet(cfg: Config, addr: str) -> None:
         scanner.storage.close()
 
 
+async def _deployer(cfg: Config, token: str) -> None:
+    import aiohttp
+    from .scanner import Scanner
+
+    scanner = Scanner(cfg)
+    scanner._session = aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=cfg.runtime.request_timeout_seconds))
+    try:
+        print(await scanner.find_deployer(token))
+    finally:
+        await scanner._session.close()
+        scanner.storage.close()
+
+
 async def _calibrate(cfg: Config, cas: list) -> None:
     import aiohttp
     from .scanner import Scanner
@@ -212,7 +226,7 @@ def main(argv=None) -> int:
         "command",
         choices=["run", "scan-once", "paper", "paper-report", "paper-digest",
                  "backtest", "selfcheck", "tg-test", "tg-chats", "inspect", "diag",
-                 "wallet", "calibrate"],
+                 "wallet", "calibrate", "deployer"],
     )
     parser.add_argument("dataset", nargs="?", help="JSONL file for backtest")
     parser.add_argument("--config", default="config/config.yaml")
@@ -267,6 +281,11 @@ def main(argv=None) -> int:
             print("wallet requires an address: wallet 0x...", file=sys.stderr)
             return 2
         asyncio.run(_wallet(cfg, args.dataset))
+    elif args.command == "deployer":
+        if not args.dataset:
+            print("deployer requires a token address: deployer 0x...", file=sys.stderr)
+            return 2
+        asyncio.run(_deployer(cfg, args.dataset))
     elif args.command == "calibrate":
         if not args.dataset:
             print("calibrate requires a file of winner CAs (one per line) or a "

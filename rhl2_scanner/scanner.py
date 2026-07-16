@@ -232,6 +232,19 @@ class Scanner:
         rpc = ch.rpc_url or ""
         host = rpc.split("://")[-1].split("/")[0] if rpc else "(unset)"
         lines = [f"=== RPC DIAG ===", f"RPC host: {host}"]
+        # DB persistence: on Railway the DB is ephemeral unless a Volume is
+        # mounted at its directory. Surface the path + a rough persistence hint.
+        import os as _os
+        db = self.cfg.runtime.db_path
+        persistent = bool(_os.environ.get("RHL2_DB_DIR")) and db not in (":memory:", "scanner.db")
+        state = (f"{len(self.storage.smart_wallets())} smart, "
+                 f"{len(self.storage.blocked_symbols())} blocked, "
+                 f"{len(self.storage.muted_tokens())} muted")
+        if persistent:
+            lines.append(f"DB: {db} — persistent (Volume) · {state}")
+        else:
+            lines.append(f"DB: {db} — ⚠️ EPHEMERAL (attach a Railway Volume at its "
+                         f"dir to keep autoseed/blocks/mutes) · {state}")
         if not rpc:
             return "\n".join(lines + ["RPC url is not set — set RHL2_RPC_URL."])
 
@@ -370,6 +383,46 @@ class Scanner:
         if acqs:
             lines.append("")
             lines.append("Tip: /inspect any of these CAs to see how they score now.")
+        return "\n".join(lines)
+
+    async def find_deployer(self, token: str) -> str:
+        """Report the contract/EOA that created a token — how to find a launchpad.
+
+        For a bonding-curve launchpad (flap.sh) the token is deployed BY the
+        manager contract, so a known flap token's *creator* is the flap manager
+        to set as RHL2_FLAP_MANAGER. Runs on the live host (chain reachable).
+        """
+        assert self._session is not None
+        base = (self.cfg.chain.explorer_api_url or "").rstrip("/")
+        base = base + "/v2" if base.endswith("/api") else base
+        lines = [f"=== DEPLOYER of {token} ==="]
+        if not base:
+            return "\n".join(lines + ["explorer_api_url not set."])
+        try:
+            async with self._session.get(f"{base}/addresses/{token}") as r:
+                data = await r.json() if r.status == 200 else None
+        except Exception as exc:  # noqa: BLE001
+            return "\n".join(lines + [f"lookup failed: {exc}"])
+        if not isinstance(data, dict):
+            return "\n".join(lines + ["no data (address not found on explorer)."])
+        creator = data.get("creator_address_hash") or data.get("creator_address")
+        tx = data.get("creation_tx_hash") or data.get("creation_transaction_hash")
+        tok = data.get("token") or {}
+        sym = tok.get("symbol")
+        if sym:
+            lines.append(f"token: ${sym}")
+        if not creator:
+            lines.append("no creator on record (not a contract, or explorer lacks it).")
+            return "\n".join(lines)
+        known = self.cfg.known_launchpad_addresses().get(str(creator).lower())
+        lines.append(f"created by: {creator}")
+        if tx:
+            lines.append(f"creation tx: {tx}")
+        if known:
+            lines.append(f"→ this is the '{known}' launchpad (already configured).")
+        else:
+            lines.append("→ if this token launched on flap, that creator IS the flap")
+            lines.append(f"   manager. Set on Railway:  RHL2_FLAP_MANAGER={creator}")
         return "\n".join(lines)
 
     async def _calibrate_one(self, ca: str) -> dict:
@@ -636,6 +689,16 @@ class Scanner:
                 await self._send_html("<pre>" + _esc(report) + "</pre>")
             except Exception as exc:
                 await self._send_html("calibrate failed: " + __import__("html").escape(str(exc)))
+        elif cmd in ("deployer", "creator"):
+            if not valid_ca:
+                await self._send_html("Usage: <code>/deployer 0x&lt;token&gt;</code> "
+                                      "(a known flap token → finds the flap manager)")
+                return
+            try:
+                from html import escape as _esc
+                await self._send_html("<pre>" + _esc(await self.find_deployer(arg)) + "</pre>")
+            except Exception as exc:
+                await self._send_html("deployer lookup failed: " + __import__("html").escape(str(exc)))
         elif cmd == "wallet":
             if not valid_ca:
                 await self._send_html("Usage: <code>/wallet 0x&lt;address&gt;</code>")
