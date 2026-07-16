@@ -107,5 +107,16 @@ class TestDiscoveryBoost(unittest.TestCase):
         self.assertTrue(any("pre-grad" in r for r in sweet.reasons))
 
 
+class TestAddrNormalization(unittest.TestCase):
+    def test_norm_addr_adds_prefix_and_lowercases(self):
+        from rhl2_scanner.sources.launchpad_curve import _norm_addr as nc
+        from rhl2_scanner.sources.poollistener import _norm_addr as np
+        for fn in (nc, np):
+            self.assertEqual(fn("1f7D7550b1B028"), "0x1f7d7550b1b028")   # missing 0x
+            self.assertEqual(fn("0x1F7d7550"), "0x1f7d7550")             # checksum -> lower
+            self.assertEqual(fn("  0xABC  "), "0xabc")                   # trimmed
+            self.assertEqual(fn(""), "")                                 # empty stays empty
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -204,42 +204,79 @@ class Scanner:
             return "\n".join(lines + [f"eth_blockNumber: ERROR {err}"])
         head_n = int(head, 16)
         lines.append(f"eth_blockNumber: {head_n}")
-
-        # 2) eth_getLogs over a small recent range on the DEX factory
         frm = max(0, head_n - 50)
-        getlogs_ok = False
-        if ch.dex_factory_address:
-            res, err = await _rpc("eth_getLogs", [{
-                "fromBlock": hex(frm), "toBlock": hex(head_n),
-                "address": ch.dex_factory_address}])
-            if err:
-                lines.append(f"eth_getLogs (factory, {frm}-{head_n}): ❌ REJECTED — {err}")
-            else:
-                getlogs_ok = True
-                lines.append(f"eth_getLogs (factory, {frm}-{head_n}): ✅ ok, {len(res)} logs")
-        else:
-            lines.append("eth_getLogs (factory): skipped — dex_factory_address unset")
 
-        # 3) eth_getLogs on each configured curve launchpad (flap)
-        for lp in self.cfg.configured_launchpads():
-            res, err = await _rpc("eth_getLogs", [{
-                "fromBlock": hex(frm), "toBlock": hex(head_n),
-                "address": lp["manager"]}])
-            name = lp.get("name", "launchpad")
-            if err:
-                lines.append(f"eth_getLogs ({name}): ❌ REJECTED — {err}")
+        async def _getlogs(addr):
+            flt = {"fromBlock": hex(frm), "toBlock": hex(head_n)}
+            if addr:
+                flt["address"] = addr
+            return await _rpc("eth_getLogs", [flt])
+
+        # 2) Isolate METHOD support from the ADDRESS: probe with no address first.
+        # A param/validation error ("invalid address ...") means getLogs works and
+        # the *address* is the problem, NOT that the RPC lacks getLogs.
+        method_ok = False
+        res, err = await _getlogs(None)
+        if err is None:
+            method_ok = True
+            lines.append(f"eth_getLogs (no address, {frm}-{head_n}): ✅ ok, {len(res)} logs")
+        elif "invalid" in err.lower() or "address" in err.lower() or "range" in err.lower():
+            method_ok = True   # it parsed the request — method is supported
+            lines.append(f"eth_getLogs (no address): parsed w/ validation error — {err}")
+        else:
+            lines.append(f"eth_getLogs (no address): ❌ {err}")
+
+        # 3) Factory address — echo the exact value so a bad/empty one is obvious.
+        fac = ch.dex_factory_address
+        lines.append(f"dex_factory_address = {fac!r}")
+        addr_ok = False
+        if fac:
+            res, err = await _getlogs(fac)
+            if err is None:
+                addr_ok = True
+                lines.append(f"eth_getLogs (factory): ✅ ok, {len(res)} logs")
             else:
-                lines.append(f"eth_getLogs ({name}): ✅ ok, {len(res)} logs")
+                lines.append(f"eth_getLogs (factory, as-is): ❌ {err}")
+                # Retry with the same normalisation the listeners now apply
+                # (ensure 0x prefix + lowercase) to confirm the self-heal.
+                norm = fac.strip()
+                if norm and not norm.lower().startswith("0x"):
+                    norm = "0x" + norm
+                norm = norm.lower()
+                if norm != fac:
+                    res2, err2 = await _getlogs(norm)
+                    if err2 is None:
+                        addr_ok = True
+                        lines.append(f"  ↳ normalised {norm!r} WORKS ✅ (listeners auto-normalise)")
+                    else:
+                        lines.append(f"  ↳ normalised {norm!r} also failed: {err2}")
+        else:
+            lines.append("  (factory unset — pool listener can't run; is the YAML "
+                         "config loaded? set RHL2_DEX_FACTORY or --config the yaml)")
+
+        # 4) eth_getLogs on each configured curve launchpad (flap)
+        for lp in self.cfg.configured_launchpads():
+            res, err = await _getlogs(lp["manager"])
+            name = lp.get("name", "launchpad")
+            lines.append(f"eth_getLogs ({name}={lp['manager']!r}): "
+                         + (f"✅ ok, {len(res)} logs" if err is None else f"❌ {err}"))
         if not self.cfg.configured_launchpads():
             lines.append("curve launchpads: none configured (set RHL2_FLAP_MANAGER)")
 
         lines.append("")
-        if getlogs_ok:
-            lines.append("VERDICT: ✅ log-based discovery works on this RPC.")
+        if method_ok and addr_ok:
+            lines.append("VERDICT: ✅ log-based discovery works — listeners are live.")
+        elif method_ok and not fac:
+            lines.append("VERDICT: ⚠️ getLogs works but no factory address is loaded. "
+                         "The pool listener needs dex_factory_address — make sure the "
+                         "run command has --config rhl2_scanner/config/robinhood.example.yaml "
+                         "(or set RHL2_DEX_FACTORY).")
+        elif method_ok:
+            lines.append("VERDICT: ⚠️ getLogs works but the factory address was rejected. "
+                         "Fix dex_factory_address / RHL2_DEX_FACTORY (see the error above).")
         else:
-            lines.append("VERDICT: ❌ eth_getLogs unavailable — earliest-catch "
-                         "(pool + curve listeners) is disabled. Set RHL2_RPC_URL "
-                         "to a dedicated RH Chain RPC that supports eth_getLogs.")
+            lines.append("VERDICT: ❌ this RPC doesn't serve eth_getLogs — set RHL2_RPC_URL "
+                         "to a dedicated RH Chain RPC that does.")
         return "\n".join(lines)
 
     async def _poll_commands(self) -> None:

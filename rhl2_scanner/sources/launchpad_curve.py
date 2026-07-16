@@ -40,6 +40,14 @@ def _addr_from_word(word_hex: str) -> str:
     return "0x" + w[-40:]
 
 
+def _norm_addr(addr: str) -> str:
+    """Ensure a 0x prefix + lowercase for RPC log filters (see poollistener)."""
+    a = (addr or "").strip()
+    if a and not a.startswith("0x") and not a.startswith("0X"):
+        a = "0x" + a
+    return a.lower()
+
+
 def _data_words(data_hex: str) -> list[str]:
     d = data_hex[2:] if data_hex.startswith("0x") else data_hex
     return [d[i:i + 64] for i in range(0, len(d), 64)]
@@ -214,7 +222,7 @@ class LaunchpadCurveListener:
         flt: dict[str, Any] = {
             "fromBlock": hex(from_block),
             "toBlock": hex(to_block),
-            "address": address,
+            "address": _norm_addr(address),
         }
         if topics:
             flt["topics"] = topics

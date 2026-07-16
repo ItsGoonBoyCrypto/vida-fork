@@ -40,6 +40,19 @@ def _topic_to_addr(topic: str) -> str:
     return "0x" + topic[-40:]
 
 
+def _norm_addr(addr: str) -> str:
+    """Ensure an address has a 0x prefix and is lowercase for RPC filters.
+
+    RH Chain's node rejects a filter address that lacks the 0x prefix
+    ("invalid address: hex string without 0x prefix"), so a config typo would
+    silently disable discovery. Normalise defensively.
+    """
+    a = (addr or "").strip()
+    if a and not a.startswith("0x") and not a.startswith("0X"):
+        a = "0x" + a
+    return a.lower()
+
+
 def _word(data_hex: str, index: int) -> str:
     """Return the 32-byte word at position ``index`` from hex data (no 0x)."""
     d = data_hex[2:] if data_hex.startswith("0x") else data_hex
@@ -181,7 +194,7 @@ class PoolListener:
         params = [{
             "fromBlock": hex(from_block),
             "toBlock": hex(to_block),
-            "address": self.chain.dex_factory_address,
+            "address": _norm_addr(self.chain.dex_factory_address),
             "topics": [topic0],
         }]
         res = await self._rpc("eth_getLogs", params)
