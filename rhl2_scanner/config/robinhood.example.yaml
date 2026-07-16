@@ -51,7 +51,11 @@ chain:
       graduate_topic: ""     # env RHL2_FLAP_GRADUATE_TOPIC (optional)
       token_arg: topic1      # where the new-token address sits in the create event
       boost: 15              # discovery-score bump for flap-origin tokens
-      # Token implementation templates — flap tokens are clones of these.
+      # flap deployed tokens carry a vanity SUFFIX: 8888 (standard) / 7777 (tax).
+      # We match new tokens off the Portal's logs by this suffix — robust across
+      # both token types and immune to the trader/creator/uint noise in events.
+      token_suffixes: ["8888", "7777"]
+      # Token implementation templates (8888/7777 PREFIX) — clones of these.
       token_impls:
         - "0x88882688a067FE97E11C2185b996286e53132222"
         - "0x7777C8743C88B3aff3cf262135beF2c8b2e83333"

@@ -92,6 +92,23 @@ def _candidate_addresses(entry: dict) -> list[str]:
     return out
 
 
+def _tokens_by_suffix(entry: dict, suffixes: list[str]) -> list[str]:
+    """Candidate addresses ending in a flap vanity suffix (8888 / 7777).
+
+    A deployed flap token's address ends in the configured suffix, which no
+    trader/creator address or uint-leakage realistically matches — so this
+    cleanly isolates the new token from the noise in a Portal event.
+    """
+    if not suffixes:
+        return []
+    out: list[str] = []
+    for cand in _candidate_addresses(entry):
+        low = cand.lower()
+        if any(low.endswith(s) for s in suffixes) and low not in out:
+            out.append(low)
+    return out
+
+
 class LaunchpadCurveListener:
     def __init__(self, cfg: Config, session: Optional[aiohttp.ClientSession] = None):
         self.cfg = cfg
@@ -101,6 +118,7 @@ class LaunchpadCurveListener:
         self._last_block: Optional[int] = None
         self._rpc_id = 0
         self._seen_topics: set[str] = set()   # discovery-mode dedupe
+        self._emitted: set[str] = set()       # tokens already yielded this run
 
     async def __aenter__(self) -> "LaunchpadCurveListener":
         if self._session is None:
@@ -150,31 +168,39 @@ class LaunchpadCurveListener:
             return
         create_topic = (lp.get("create_topic") or "").strip()
         token_arg = lp.get("token_arg") or "topic1"
+        suffixes = [str(s).lower() for s in (lp.get("token_suffixes") or [])]
         name = lp.get("name", "launchpad")
+        skip = {manager.lower(), (self.chain.weth_address or "").lower()}
+
+        def _emit(token: str) -> None:
+            low = token.lower()
+            if not low or int(low, 16) == 0 or low in skip or low in self._emitted:
+                return
+            self._emitted.add(low)
+            snaps[low] = TokenSnapshot(
+                chain=self.chain.dexscreener_chain,
+                pair_address="",              # no pool yet — still on the curve
+                token_address=token,
+                age_minutes=0.0,
+                launchpad=name,
+            )
+            log.info("curve [%s]: new token %s", name, token)
 
         start = from_block
         while start <= head:
             end = min(start + self.chain.pool_scan_max_range - 1, head)
-            # Discovery mode (no topic): fetch ALL manager logs, learn the shape.
             topics = [create_topic] if create_topic else None
             logs = await self._get_logs(manager, start, end, topics)
             for entry in logs:
-                if not create_topic:
+                if create_topic:                       # explicit event pinned
+                    tok = _extract_token(entry, token_arg)
+                    if tok:
+                        _emit(tok)
+                elif suffixes:                         # vanity-suffix matching
+                    for tok in _tokens_by_suffix(entry, suffixes):
+                        _emit(tok)
+                else:                                  # pure discovery logging
                     self._discover(name, entry)
-                    continue
-                token = _extract_token(entry, token_arg)
-                if not token or int(token, 16) == 0:
-                    continue
-                low = token.lower()
-                if low in (manager.lower(), (self.chain.weth_address or "").lower()):
-                    continue
-                snaps[low] = TokenSnapshot(
-                    chain=self.chain.dexscreener_chain,
-                    pair_address="",              # no pool yet — still on the curve
-                    token_address=token,
-                    age_minutes=0.0,
-                    launchpad=name,
-                )
             start = end + 1
 
     def _discover(self, name: str, entry: dict) -> None:
