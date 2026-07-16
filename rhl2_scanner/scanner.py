@@ -486,6 +486,80 @@ class Scanner:
             lines.append(f"   manager. Set on Railway:  RHL2_FLAP_MANAGER={creator}")
         return "\n".join(lines)
 
+    async def curveprobe(self, token: str) -> str:
+        """Probe the flap Portal for a token's on-chain curve price/state.
+
+        We don't have flap's ABI, so try a battery of common bonding-curve view
+        functions against the Portal (and the token itself) and report which
+        return data. Runs on the live host. Paste the output back and we pin the
+        real price getter to score flap tokens pre-graduation.
+        """
+        from .keccak import keccak256
+        assert self._session is not None
+        portal = self.cfg._launchpad("flap")
+        portal = portal.get("manager") if portal else ""
+        if not portal:
+            return "no flap Portal configured (RHL2_FLAP_MANAGER / config)."
+        tok = token.lower().replace("0x", "").rjust(64, "0")
+        amt = (10 ** 18).to_bytes(32, "big").hex()   # 1e18 for quote fns
+
+        def sel(sig: str) -> str:
+            return keccak256(sig.encode()).hex()[:8]
+
+        # (signature, calldata-suffix) — target is Portal unless name endswith @token
+        addr_fns = [
+            "price", "getPrice", "currentPrice", "tokenPrice", "priceOf", "lastPrice",
+            "getTokenState", "tokenState", "getState", "state", "tokenInfo",
+            "getTokenInfo", "tokens", "getToken", "getReserves", "reserves",
+            "virtualReserves", "getReserve", "marketCap", "getMarketCap", "progress",
+            "getProgress", "bondingProgress", "getBondingCurve", "bondingCurve",
+            "curves", "getCurve", "getPool", "pools", "poolOf", "launchInfo",
+            "getLaunch", "launches", "getTokenData", "tokenData",
+        ]
+        quote_fns = ["quoteBuy", "quoteSell", "getAmountOut", "calculateBuy",
+                     "calculateSell", "getBuyPrice", "getSellPrice"]
+        token_noarg = ["price", "getPrice", "currentPrice", "reserves",
+                       "getReserves", "totalRaised", "progress", "marketCap"]
+
+        async def call(target: str, data: str):
+            payload = {"jsonrpc": "2.0", "id": 1, "method": "eth_call",
+                       "params": [{"to": target, "data": "0x" + data}, "latest"]}
+            try:
+                async with self._session.post(self.cfg.chain.rpc_url, json=payload) as r:
+                    if r.status != 200:
+                        return None
+                    d = await r.json()
+                    return d.get("result")
+            except Exception:  # noqa: BLE001
+                return None
+
+        def interesting(res) -> bool:
+            return bool(res) and res != "0x" and set(res.replace("0x", "")) != {"0"}
+
+        lines = [f"=== CURVE PROBE {token} ===", f"Portal: {portal}"]
+        hits = 0
+        for name in addr_fns:
+            res = await call(portal, sel(f"{name}(address)") + tok)
+            if interesting(res):
+                hits += 1
+                lines.append(f"Portal.{name}(address) → {res[:200]}")
+        for name in quote_fns:
+            res = await call(portal, sel(f"{name}(address,uint256)") + tok + amt)
+            if interesting(res):
+                hits += 1
+                lines.append(f"Portal.{name}(address,uint256) → {res[:200]}")
+        for name in token_noarg:
+            res = await call(token, sel(f"{name}()"))
+            if interesting(res):
+                hits += 1
+                lines.append(f"token.{name}() → {res[:200]}")
+        if not hits:
+            lines.append("no known getter returned data — the Portal likely uses "
+                         "different names. Grab the read function from flap docs.")
+        else:
+            lines.append(f"\n{hits} getter(s) returned data — paste this back to pin pricing.")
+        return "\n".join(lines)
+
     async def _calibrate_one(self, ca: str) -> dict:
         """Enrich + score one known winner; capture metrics + what blocked it."""
         assert self._session is not None
@@ -680,6 +754,7 @@ class Scanner:
             "<b>Research &amp; tuning</b>",
             "<code>/wallet 0xWallet</code> — what tokens a wallet recently bought",
             "<code>/deployer 0xToken</code> — who created a token (finds a launchpad's manager)",
+            "<code>/curveprobe 0xToken</code> — probe flap Portal for a token's on-chain price",
             "<code>/calibrate 0xCA1 0xCA2 …</code> — tune thresholds against your known winners",
             "",
             "<i>Alerts you'll get: 🚨 Gem / 👀 Watch / 🌱 Early · 🔼 Upgrades · "
@@ -837,6 +912,15 @@ class Scanner:
                 await self._send_html("<pre>" + _esc(report) + "</pre>")
             except Exception as exc:
                 await self._send_html("calibrate failed: " + __import__("html").escape(str(exc)))
+        elif cmd in ("curveprobe", "probe"):
+            if not valid_ca:
+                await self._send_html("Usage: <code>/curveprobe 0x&lt;flap token&gt;</code>")
+                return
+            try:
+                from html import escape as _esc
+                await self._send_html("<pre>" + _esc(await self.curveprobe(arg)) + "</pre>")
+            except Exception as exc:
+                await self._send_html("curveprobe failed: " + __import__("html").escape(str(exc)))
         elif cmd in ("deployer", "creator"):
             if not valid_ca:
                 await self._send_html("Usage: <code>/deployer 0x&lt;token&gt;</code> "
