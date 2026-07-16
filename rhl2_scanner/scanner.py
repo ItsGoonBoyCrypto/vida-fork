@@ -110,6 +110,11 @@ class Scanner:
         # curve, before they graduate to a DEX (i.e. before DexScreener sees them).
         self._curve_listener: Optional[LaunchpadCurveListener] = None
         self.paper = PaperTrader(cfg, self.storage) if cfg.runtime.paper_mode else None
+        # Live performance tracker: records tokens we ACTUALLY alerted on and
+        # re-prices them, so we can report how the alerts really did (peak x,
+        # hit rate, rug rate). Only in live mode — paper_mode uses self.paper.
+        self.perf = (PaperTrader(cfg, self.storage)
+                     if (not cfg.runtime.paper_mode and not cfg.runtime.dry_run) else None)
         self._last_digest_ts: Optional[float] = None
         self._wallet_watcher = None  # bound to the shared session in run_once
         self._cmd_offset = None      # Telegram getUpdates offset (loaded from db)
@@ -586,6 +591,16 @@ class Scanner:
             if arg in self.cfg.smart_money_wallets:
                 self.cfg.smart_money_wallets.remove(arg)
             await self._send_html(f"🧠 Removed <code>{arg}</code>.")
+        elif cmd in ("perf", "performance"):
+            from .paper import PaperTrader, format_digest_html
+            win = self.cfg.runtime.paper_digest_win_multiple
+            rep = PaperTrader(self.cfg, self.storage).report(win_multiple=win)
+            if not rep["total_recorded"]:
+                await self._send_html("📊 No alert outcomes tracked yet — "
+                                      "performance builds as alerted tokens age.")
+                return
+            await self._send_html(
+                format_digest_html(rep, win, title="Alert Performance", noun="alerts"))
         elif cmd == "block":
             from .filters import _norm_symbol
             sym = _norm_symbol(parts[1]) if len(parts) > 1 else ""
@@ -703,9 +718,11 @@ class Scanner:
             log.exception("startup message failed")
 
     async def _maybe_send_digest(self) -> None:
-        """Post the calibration digest every paper_digest_interval_hours."""
+        """Post the calibration/performance digest every interval hours."""
         rc = self.cfg.runtime
-        if not rc.paper_digest_enabled:
+        # Enabled explicitly (paper), or implicitly in live mode where the perf
+        # tracker gives real alert-outcome feedback.
+        if not rc.paper_digest_enabled and self.perf is None:
             return
         now = time.time()
         interval = max(0.1, rc.paper_digest_interval_hours) * 3600.0
@@ -841,14 +858,15 @@ class Scanner:
         # Whale-wallet activity alerts (independent of the gem scan).
         await self._poll_wallets()
 
-        # Re-price open paper positions and record any reached checkpoints.
-        if self.paper is not None:
-            try:
-                settled = await self.paper.settle_open(dex)
-                if settled:
-                    log.info("paper: settled %d positions this cycle", settled)
-            except Exception:
-                log.exception("paper settle failed")
+        # Re-price open paper/perf positions and record any reached checkpoints.
+        for tracker, name in ((self.paper, "paper"), (self.perf, "perf")):
+            if tracker is not None:
+                try:
+                    settled = await tracker.settle_open(dex)
+                    if settled:
+                        log.info("%s: settled %d positions this cycle", name, settled)
+                except Exception:
+                    log.exception("%s settle failed", name)
 
         return [r for r in results if isinstance(r, ScoreResult)]
 
@@ -918,6 +936,9 @@ class Scanner:
         if tier == 2 and prev < 2:
             await self._maybe_autoseed(snap)
         self.storage.record_alert(snap, result, rank=tier)
+        # Track this alert's real outcome (peak x / hit / rug) on first alert.
+        if self.perf is not None and prev < 0:
+            self.perf.record_alerted(snap, result)
         return result
 
     @staticmethod
