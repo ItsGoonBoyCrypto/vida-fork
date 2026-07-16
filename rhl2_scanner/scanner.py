@@ -41,6 +41,54 @@ from .alerting.telegram import TelegramNotifier
 log = logging.getLogger("rhl2.scanner")
 
 
+def _blocker_key(failure: str) -> str:
+    """Collapse a gate-failure string to a stable key for aggregation.
+
+    e.g. 'liquidity $3,200 < $5,000' -> 'liquidity', 'top10 62.0% > skip 60%'
+    -> 'top10', 'mint authority not revoked' -> 'mint authority not revoked'.
+    """
+    numeric_heads = {
+        "liquidity", "mcap", "age", "top10", "top1", "bundled", "dev",
+        "buy", "sell", "sniper", "risk", "holders",
+    }
+    head = failure.split()[0] if failure else failure
+    if head in numeric_heads:
+        # keep a slightly longer key for tax to distinguish buy/sell
+        if head in ("buy", "sell"):
+            return f"{head} tax"
+        return head
+    return failure.split(" (")[0]
+
+
+def _round_nice(x: float) -> float:
+    """Round to a human-friendly value (2 significant-ish figures)."""
+    if x <= 0:
+        return 0.0
+    import math
+    if x >= 1000:
+        step = 10 ** (len(str(int(x))) - 2)
+        return float(int(round(x / step)) * step)
+    if x >= 10:
+        return float(int(round(x / 5)) * 5)
+    return round(x, 1)
+
+
+def _fmt(x: float, unit: str) -> str:
+    if x is None:
+        return "?"
+    if unit == "$":
+        if x >= 1_000_000:
+            return f"${x/1_000_000:.2f}M"
+        if x >= 1_000:
+            return f"${x/1_000:.1f}k"
+        return f"${x:.0f}"
+    if unit == "%":
+        return f"{x:.0f}%"
+    if unit == "m":
+        return f"{x:.0f}m"
+    return f"{x:.0f}"
+
+
 class Scanner:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -312,6 +360,137 @@ class Scanner:
             lines.append("Tip: /inspect any of these CAs to see how they score now.")
         return "\n".join(lines)
 
+    async def _calibrate_one(self, ca: str) -> dict:
+        """Enrich + score one known winner; capture metrics + what blocked it."""
+        assert self._session is not None
+        dex = DexScreenerClient(self.cfg, session=self._session)
+        pairs = await dex.pairs_for_token(ca)
+        snap = pairs[0] if pairs else TokenSnapshot(
+            chain=self.cfg.chain.dexscreener_chain, pair_address="", token_address=ca)
+        await self._enrich(snap)
+        th = self.cfg.thresholds
+        strict = self.cfg.active_tier is RiskTier.MOMENTUM
+        pragmatic = self.cfg.runtime.live_pragmatic_safety
+        result = score_token(snap, self.cfg, strict_safety=strict, pragmatic=pragmatic)
+        qs = quick_start_gate(snap, th)
+        would_gem = result.level.value in ("strong", "watch")
+        rc = self.cfg.runtime
+        would_early = (
+            rc.early_launch_enabled and not is_stock_token(snap)
+            and snap.age_minutes is not None and snap.age_minutes <= rc.early_launch_max_age_minutes
+            and (snap.liquidity_usd or 0) >= rc.early_launch_min_liquidity_usd
+            and (result.safety_passed or not rc.early_launch_require_safety)
+        )
+        s = snap.safety
+        tax = None
+        if s.buy_tax_pct is not None or s.sell_tax_pct is not None:
+            tax = max(s.buy_tax_pct or 0.0, s.sell_tax_pct or 0.0)
+        return {
+            "ca": ca, "symbol": snap.symbol or "?", "found": bool(pairs),
+            "metrics": {
+                "liquidity_usd": snap.liquidity_usd, "market_cap_usd": snap.market_cap_usd,
+                "age_minutes": snap.age_minutes, "holder_count": snap.holder_count,
+                "top10_supply_pct": snap.top10_supply_pct, "top1_supply_pct": snap.top1_supply_pct,
+                "bundle_supply_pct": s.bundle_supply_pct, "sniper_cluster_pct": s.sniper_cluster_pct,
+                "dev_holdings_pct": s.dev_holdings_pct, "max_tax_pct": tax,
+            },
+            "quick_fails": qs.failures, "safety_fails": result.gate_failures,
+            "composite": result.composite, "would_gem": would_gem, "would_early": would_early,
+            "would_alert": would_gem or would_early,
+        }
+
+    async def calibrate(self, cas: list[str]) -> str:
+        """Run known winners through the pipeline; suggest thresholds that admit them.
+
+        For every 'this should have alerted' CA, we see what actually blocked it
+        and, for each numeric threshold, what value would let the winners through.
+        The recommendations are computed to admit ALL analysed winners.
+        """
+        cas = [c.lower() for c in cas if c.startswith("0x") and len(c) == 42]
+        if not cas:
+            return "calibrate: give one or more token addresses (0x…)."
+        rows = []
+        for ca in cas:
+            try:
+                rows.append(await self._calibrate_one(ca))
+            except Exception as exc:  # keep going; one bad CA shouldn't abort
+                rows.append({"ca": ca, "error": str(exc)})
+
+        ok = [r for r in rows if "error" not in r]
+        alerts = sum(1 for r in ok if r["would_alert"])
+        found = sum(1 for r in ok if r["found"])
+        lines = [
+            "=== CALIBRATION vs winners ===",
+            f"analysed {len(ok)}/{len(rows)} | on DexScreener: {found} | "
+            f"would alert now: {alerts}/{len(ok)}",
+            "",
+        ]
+        for r in rows:
+            if "error" in r:
+                lines.append(f"  {r['ca']}  ERROR {r['error']}")
+                continue
+            verdict = "✅ ALERT" if r["would_alert"] else "❌ missed"
+            why = ""
+            if not r["would_alert"]:
+                blk = (r["quick_fails"] + r["safety_fails"])[:2]
+                why = " — " + "; ".join(blk) if blk else " — low score"
+            lines.append(f"  ${r['symbol']:<9} {verdict} score={r['composite']:.0f}{why}")
+
+        # Aggregate blockers.
+        from collections import Counter
+        blockers: Counter = Counter()
+        for r in ok:
+            for f in r["quick_fails"] + r["safety_fails"]:
+                blockers[_blocker_key(f)] += 1
+        if blockers:
+            lines += ["", "Top blockers across winners:"]
+            for k, v in blockers.most_common(8):
+                lines.append(f"  {k}: {v}/{len(ok)}")
+
+        # Numeric-threshold suggestions that admit all winners.
+        specs = [
+            ("liquidity_usd", "floor", ["thin_liquidity_usd", "min_liquidity_usd"], "$", 0.8),
+            ("market_cap_usd", "floor", ["min_market_cap_usd"], "$", 0.8),
+            ("market_cap_usd", "ceiling", ["max_market_cap_usd"], "$", 1.25),
+            ("age_minutes", "ceiling", ["max_age_minutes"], "m", 1.25),
+            ("holder_count", "floor", ["min_holders"], "", 0.8),
+            ("top10_supply_pct", "ceiling", ["skip_top10_pct"], "%", 1.1),
+            ("top1_supply_pct", "ceiling", ["max_top1_pct"], "%", 1.1),
+            ("bundle_supply_pct", "ceiling", ["skip_bundle_pct"], "%", 1.1),
+            ("sniper_cluster_pct", "ceiling", ["max_sniper_cluster_pct"], "%", 1.1),
+            ("dev_holdings_pct", "ceiling", ["max_dev_holdings_pct"], "%", 1.1),
+            ("max_tax_pct", "ceiling", ["max_tax_pct"], "%", 1.0),
+        ]
+        th = self.cfg.thresholds
+        recs = []
+        for metric, direction, attrs, unit, margin in specs:
+            vals = [r["metrics"].get(metric) for r in ok]
+            vals = [v for v in vals if v is not None]
+            if not vals:
+                continue
+            for attr in attrs:
+                cur = getattr(th, attr, None)
+                if cur is None:
+                    continue
+                if direction == "floor":
+                    need = min(vals)
+                    if cur > need:  # a winner sat below the floor
+                        rec = _round_nice(need * margin)
+                        recs.append(f"  {attr}: {_fmt(cur, unit)} → {_fmt(rec, unit)} "
+                                    f"(lowest winner {_fmt(need, unit)})")
+                else:  # ceiling
+                    need = max(vals)
+                    if cur and cur < need:  # a winner sat above the ceiling (0=disabled, skip)
+                        rec = _round_nice(need * margin)
+                        recs.append(f"  {attr}: {_fmt(cur, unit)} → {_fmt(rec, unit)} "
+                                    f"(highest winner {_fmt(need, unit)})")
+        if recs:
+            lines += ["", "Suggested threshold changes (admit all winners):"] + recs
+        else:
+            lines += ["", "No numeric threshold change needed — remaining misses are "
+                      "safety-gate or data (see blockers above)."]
+        return "\n".join(lines)
+
     async def _poll_commands(self) -> None:
         """Receive /zero /unzero /muted from the alert channel and act on them."""
         tg = self.cfg.telegram
@@ -400,6 +579,18 @@ class Scanner:
             if arg in self.cfg.smart_money_wallets:
                 self.cfg.smart_money_wallets.remove(arg)
             await self._send_html(f"🧠 Removed <code>{arg}</code>.")
+        elif cmd == "calibrate":
+            cas = [p.lower() for p in parts[1:] if p.lower().startswith("0x") and len(p) == 42]
+            if not cas:
+                await self._send_html("Usage: <code>/calibrate 0xCA1 0xCA2 …</code> "
+                                      "(paste your known winners)")
+                return
+            try:
+                from html import escape as _esc
+                report = await self.calibrate(cas)
+                await self._send_html("<pre>" + _esc(report) + "</pre>")
+            except Exception as exc:
+                await self._send_html("calibrate failed: " + __import__("html").escape(str(exc)))
         elif cmd == "wallet":
             if not valid_ca:
                 await self._send_html("Usage: <code>/wallet 0x&lt;address&gt;</code>")
