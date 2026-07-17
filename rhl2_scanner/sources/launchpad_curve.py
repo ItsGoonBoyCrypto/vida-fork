@@ -29,8 +29,12 @@ from typing import Any, Optional
 import aiohttp
 
 from ..config import Config
+from ..keccak import keccak256
 from ..models import TokenSnapshot
 from .poollistener import _backoff, _transient
+
+# selector for the flap Portal read function getTokenV2(address)
+_GET_TOKEN_V2 = keccak256(b"getTokenV2(address)").hex()[:8]
 
 log = logging.getLogger("rhl2.launchpad_curve")
 
@@ -119,6 +123,8 @@ class LaunchpadCurveListener:
         self._rpc_id = 0
         self._seen_topics: set[str] = set()   # discovery-mode dedupe
         self._emitted: set[str] = set()       # tokens already yielded this run
+        self._checked: set[str] = set()       # addrs run through getTokenV2 (once ever)
+        self._confirm_left = 0                 # per-cycle getTokenV2 confirmation budget
 
     async def __aenter__(self) -> "LaunchpadCurveListener":
         if self._session is None:
@@ -150,6 +156,12 @@ class LaunchpadCurveListener:
         from_block = self._last_block + 1
         if from_block > head:
             return []
+
+        # Bound getTokenV2 confirmations per cycle (protects the rate-limited RPC).
+        self._confirm_left = max(0, int(self.chain.curve_confirm_budget))
+        # Keep the checked-addr cache from growing without bound over long runs.
+        if len(self._checked) > 20000:
+            self._checked.clear()
 
         snaps: dict[str, TokenSnapshot] = {}
         for lp in self._curve_launchpads():
@@ -196,12 +208,57 @@ class LaunchpadCurveListener:
                     tok = _extract_token(entry, token_arg)
                     if tok:
                         _emit(tok)
-                elif suffixes:                         # vanity-suffix matching
+                elif suffixes:                         # vanity-suffix matching (free)
+                    matched = set()
                     for tok in _tokens_by_suffix(entry, suffixes):
                         _emit(tok)
+                        matched.add(tok.lower())
+                    # Non-vanity flap tokens (e.g. $meow, no 8888/7777 suffix) show
+                    # up as candidates too — confirm the unmatched ones via
+                    # getTokenV2, bounded by the per-cycle budget + a one-shot cache.
+                    await self._confirm_nonvanity(manager, entry, matched, skip, _emit)
                 else:                                  # pure discovery logging
                     self._discover(name, entry)
             start = end + 1
+
+    async def _confirm_nonvanity(self, manager: str, entry: dict, matched: set,
+                                 skip: set, emit) -> None:
+        """Confirm non-suffix candidates as flap tokens via Portal.getTokenV2.
+
+        Only the addresses that didn't match a vanity suffix, bounded by the
+        per-cycle budget and a permanent cache so each is checked at most once.
+        A candidate for which getTokenV2 returns a valid (non-Invalid) status is
+        a real flap token regardless of its address shape → emit it.
+        """
+        if self._confirm_left <= 0:
+            return
+        for cand in _candidate_addresses(entry):
+            if self._confirm_left <= 0:
+                return
+            low = cand.lower()
+            if (low in matched or low in skip or low in self._emitted
+                    or low in self._checked or int(low, 16) == 0):
+                continue
+            self._checked.add(low)
+            self._confirm_left -= 1
+            if await self._is_flap_token(manager, low):
+                emit(low)
+
+    async def _is_flap_token(self, manager: str, candidate: str) -> bool:
+        """True if Portal.getTokenV2(candidate) returns a valid (non-Invalid) status."""
+        arg = candidate.lower().replace("0x", "").rjust(64, "0")
+        res = await self._rpc(
+            "eth_call", [{"to": manager, "data": "0x" + _GET_TOKEN_V2 + arg}, "latest"])
+        if not res or res == "0x":
+            return False
+        body = res[2:] if res.startswith("0x") else res
+        if len(body) < 64:
+            return False
+        try:
+            status = int(body[:64], 16)   # TokenStateV2.status; 0 == Invalid
+        except ValueError:
+            return False
+        return status != 0
 
     def _discover(self, name: str, entry: dict) -> None:
         """Log a never-before-seen event shape so we can pin the real ABI."""

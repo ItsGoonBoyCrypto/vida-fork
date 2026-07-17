@@ -47,6 +47,7 @@ class TestListenerSuffixMode(unittest.IsolatedAsyncioTestCase):
     async def test_poll_emits_flap_tokens_once(self):
         cfg = Config.load("rhl2_scanner/config/robinhood.example.yaml")
         cfg.chain.rpc_url = "http://rpc"
+        cfg.chain.curve_confirm_budget = 0   # suffix-only path (non-vanity confirm is tested separately)
         lis = LaunchpadCurveListener(cfg)
 
         # fake chain: head at 100, logs referencing two tokens + noise

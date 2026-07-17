@@ -28,6 +28,10 @@ chain:
   dex_factory_kind: "univ3"
   pool_scan_block_lookback: 3000
   pool_scan_max_range: 5000
+  # Non-vanity flap detection: per-cycle budget of Portal.getTokenV2 confirmations
+  # for candidates that lack the 8888/7777 suffix (catches tokens like $meow).
+  # Each address is cached so it's checked at most once. 0 = suffix-only.
+  curve_confirm_budget: 10
 
   # --- Bonding-curve launchpads (flap.sh) — EARLIEST catch, pre-graduation ---
   # flap launches onto a bonding curve; a token only hits DexScreener AFTER it
@@ -51,9 +55,11 @@ chain:
       graduate_topic: ""     # env RHL2_FLAP_GRADUATE_TOPIC (optional)
       token_arg: topic1      # where the new-token address sits in the create event
       boost: 15              # discovery-score bump for flap-origin tokens
-      # flap deployed tokens carry a vanity SUFFIX: 8888 (standard) / 7777 (tax).
-      # We match new tokens off the Portal's logs by this suffix — robust across
-      # both token types and immune to the trader/creator/uint noise in events.
+      # MOST flap tokens carry a vanity SUFFIX: 8888 (standard) / 7777 (tax). We
+      # match those off the Portal's logs by suffix — free, and immune to the
+      # trader/creator/uint noise in events. Tokens WITHOUT the suffix (e.g.
+      # $meow, ending 0aa9) are caught by confirming non-suffix candidates via
+      # Portal.getTokenV2 (see chain.curve_confirm_budget below).
       token_suffixes: ["8888", "7777"]
       # Token implementation templates (8888/7777 PREFIX) — clones of these.
       token_impls:

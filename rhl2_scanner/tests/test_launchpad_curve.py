@@ -113,6 +113,97 @@ class TestDiscoveryBoost(unittest.TestCase):
         self.assertGreater(sweet.raw, early.raw)
 
 
+NONVANITY = "0x8f6761371669509bdc457875c500f9bb5bd10aa9"  # $meow — no 8888/7777
+VANITY = "0x1234567890123456789012345678901234567777"      # carries the suffix
+TRADER = "0x9999999999999999999999999999999999999999"
+
+
+class _Resp:
+    def __init__(self, body, status=200):
+        self._b, self.status = body, status
+    async def json(self):
+        return self._b
+    async def __aenter__(self):
+        return self
+    async def __aexit__(self, *a):
+        return False
+
+
+def _word(n: int) -> str:
+    return f"{n:064x}"
+
+
+class _FakeSession:
+    """Serves eth_blockNumber / eth_getLogs / eth_call for the listener."""
+    def __init__(self, logs, flap_status):
+        self.logs = logs                    # list of log entries eth_getLogs returns
+        self.flap_status = flap_status      # {addr_lower: status_int} for getTokenV2
+        self.calls = []                     # eth_call target addresses (for budget asserts)
+
+    def post(self, url, json):
+        m = json["method"]
+        if m == "eth_blockNumber":
+            return _Resp({"result": hex(1000)})
+        if m == "eth_getLogs":
+            return _Resp({"result": self.logs})
+        if m == "eth_call":
+            data = json["params"][0]["data"]
+            addr = "0x" + data[-40:]
+            self.calls.append(addr.lower())
+            status = self.flap_status.get(addr.lower())
+            if status is None:
+                return _Resp({"result": "0x"})     # not a flap token → reverts/empty
+            return _Resp({"result": "0x" + _word(status) + _word(0) * 6})
+        return _Resp({"result": None})
+
+
+class TestNonVanityConfirm(unittest.IsolatedAsyncioTestCase):
+    def _listener(self, logs, flap_status):
+        cfg = Config()
+        cfg.chain.rpc_url = "http://rpc"
+        cfg._launchpad("flap")["manager"] = MANAGER
+        cfg._launchpad("flap")["token_suffixes"] = ["8888", "7777"]
+        cfg.chain.curve_confirm_budget = 10
+        lis = LaunchpadCurveListener(cfg, session=_FakeSession(logs, flap_status))
+        lis._last_block = 999   # so from_block=1000=head, one small range
+        return lis
+
+    async def test_nonvanity_token_confirmed_and_emitted(self):
+        # log carries a non-vanity token + a trader; only the token is a flap token
+        log = {"topics": ["0xcreate", _pad(NONVANITY)], "data": _pad(TRADER)}
+        lis = self._listener([log], {NONVANITY.lower(): 1})  # trader unknown → not flap
+        snaps = await lis.poll_new_launches()
+        addrs = [s.token_address.lower() for s in snaps]
+        self.assertIn(NONVANITY.lower(), addrs)          # caught despite no suffix
+        self.assertNotIn(TRADER.lower(), addrs)          # trader rejected by getTokenV2
+
+    async def test_vanity_token_needs_no_confirmation(self):
+        log = {"topics": ["0xcreate", _pad(VANITY)], "data": _pad(TRADER)}
+        lis = self._listener([log], {})                  # getTokenV2 would say 'not flap'
+        snaps = await lis.poll_new_launches()
+        addrs = [s.token_address.lower() for s in snaps]
+        self.assertIn(VANITY.lower(), addrs)             # suffix path, free
+        # the vanity token was emitted without a getTokenV2 call for it
+        self.assertNotIn(VANITY.lower(), lis._session.calls)
+
+    async def test_budget_bounds_confirmations(self):
+        log = {"topics": ["0xcreate", _pad(NONVANITY), _pad(TRADER),
+                           _pad("0x" + "a" * 40)], "data": "0x"}
+        lis = self._listener([log], {NONVANITY.lower(): 1})
+        lis.cfg.chain.curve_confirm_budget = 1           # only one getTokenV2 allowed
+        await lis.poll_new_launches()
+        self.assertEqual(len(lis._session.calls), 1)     # budget respected
+
+    async def test_checked_cache_prevents_recheck(self):
+        log = {"topics": ["0xcreate", _pad(TRADER)], "data": "0x"}
+        lis = self._listener([log], {})                  # trader is not a flap token
+        await lis.poll_new_launches()
+        first = len(lis._session.calls)
+        lis._last_block = 999                            # re-scan same block window
+        await lis.poll_new_launches()
+        self.assertEqual(len(lis._session.calls), first)  # cached → not re-called
+
+
 class TestAddrNormalization(unittest.TestCase):
     def test_norm_addr_adds_prefix_and_lowercases(self):
         from rhl2_scanner.sources.launchpad_curve import _norm_addr as nc

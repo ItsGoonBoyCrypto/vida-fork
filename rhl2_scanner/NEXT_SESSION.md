@@ -34,8 +34,10 @@ token — price/supply/reserve all internally consistent):
    18-dec scale (math already self-consistent; low risk).
 2. Consider a scoring **boost for tokens at ~60-95% graduation** (about to
    graduate = prime entry) — small tweak in scoring.py.
-3. Switch flap detection from vanity-suffix (8888/7777) to "getTokenV2 status
-   != Invalid" so non-vanity flap tokens are caught too.
+3. ~~Switch flap detection from vanity-suffix to getTokenV2~~ ✅ DONE — the curve
+   listener keeps the free suffix fast-path AND confirms non-suffix candidates via
+   Portal.getTokenV2 (bounded budget + one-shot cache), so non-vanity flap tokens
+   like $meow are now caught. Knob: `chain.curve_confirm_budget` (0 = suffix-only).
 
 ## ✅ Live & working (all on Railway, persistent Volume at /app/data)
 

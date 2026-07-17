@@ -86,6 +86,10 @@ class ChainConfig:
     dex_factory_kind: str = "univ2"                    # "univ2" | "univ3"
     pool_scan_block_lookback: int = 3000               # blocks to backfill on first poll
     pool_scan_max_range: int = 5000                    # cap per eth_getLogs call
+    # Non-vanity flap detection: confirm this many non-suffix candidates per cycle
+    # via Portal.getTokenV2 (catches flap tokens without an 8888/7777 address).
+    # 0 disables (suffix-only). Each address is cached so it's checked once.
+    curve_confirm_budget: int = 10
 
     # --- Swap simulation (honeypot / tax) ---
     dex_router_address: str = ""                       # router for the sell simulation
