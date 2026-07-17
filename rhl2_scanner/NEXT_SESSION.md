@@ -75,9 +75,20 @@ with a host Variable once verified on Blockscout:
   no curve, already caught by DexScreener (no wiring needed).
 - Others seen: ArrowPad, RH6900, Robinfun, RobinPad (not live yet), hood.fun.
 
-The listener now confirms non-suffix candidates via a per-launchpad `confirm_fn`
-(flap=getTokenV2). To finish RobinFun/Bags pre-grad: set their manager env → read
-`curve discovery [robinfun]` host logs → pin create_topic or confirm_fn.
+The listener confirms non-suffix candidates via a per-launchpad `confirm_fn`
+(flap=getTokenV2). Research nailed the mechanisms (exact ABIs need Blockscout,
+which the build-env proxy blocks — the Railway runtime reaches it fine):
+
+- **Bags**: state read is `BagsLens.getTokenState(token)` → (curve, feeShare,
+  poolId, migrated, …). ENABLE = `RHL2_BAGS_MANAGER=<BagsLens addr>` +
+  `RHL2_BAGS_CONFIRM_FN=getTokenState(address)`. Only missing: the Lens address.
+- **RobinFun**: factory `0xD952A74C85a2221a7DaB185c62cfD7EBa8C94AFC` (verified),
+  creation event + `Migrated`. ENABLE = `RHL2_ROBINFUN_MANAGER=<factory>` → read
+  `curve discovery [robinfun]` logs → pin `RHL2_ROBINFUN_CREATE_TOPIC` + token_arg.
+
+**2-min Blockscout lookup to finish (user has RH access, build env doesn't):**
+(1) the BagsLens address on RH; (2) RobinFun's creation-event topic0 + which
+topic/data slot holds the new token. Paste both → wired instantly.
 
 ## Ongoing (user)
 

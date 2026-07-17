@@ -74,16 +74,30 @@ chain:
     # robinhoodchain.blockscout.com before trusting it — the addresses below are
     # from public research, not on-chain-confirmed by the bot.
     - name: robinfun
-      manager: ""            # RHL2_ROBINFUN_MANAGER — research: 0xD952A74C85a2221a7DaB185c62cfD7EBa8C94AFC (RobinFunFactory, curve → 100%-burned LP ~$44k)
+      # RobinFunFactory (source-verified): 0xD952A74C85a2221a7DaB185c62cfD7EBa8C94AFC
+      # curve → 100%-burned LP at ~$44k. Emits a token-creation event + a `Migrated`
+      # graduation event. To finish pre-grad: set RHL2_ROBINFUN_MANAGER to the
+      # factory, read `curve discovery [robinfun]` host logs for the creation
+      # topic0 + token slot, then set RHL2_ROBINFUN_CREATE_TOPIC (+ token_arg).
+      # Alternatively, on Blockscout's Read-Contract tab find the fn that takes a
+      # token address → bonding state and set RHL2_ROBINFUN_CONFIRM_FN to it.
+      manager: ""            # RHL2_ROBINFUN_MANAGER
       kind: curve
-      create_topic: ""       # env RHL2_ROBINFUN_CREATE_TOPIC (blank => discovery)
+      create_topic: ""       # RHL2_ROBINFUN_CREATE_TOPIC (blank => discovery)
+      token_arg: topic1
       boost: 12
-      # confirm_fn: ""       # env RHL2_ROBINFUN_CONFIRM_FN once its read fn is known
     - name: bags
-      manager: ""            # RHL2_BAGS_MANAGER — bags.fm curve → Uniswap v4 locked LP (docs.bags.fm/robinhood)
+      # bags.fm curve → Uniswap v4 with locked LP. State read: BagsLens.getTokenState(
+      # token) → (curve, feeShare, poolId, migrated, …); `Migrated` graduation event.
+      # To enable: set RHL2_BAGS_MANAGER to the BagsLens address (grab it from the
+      # Bags RH deploy) and RHL2_BAGS_CONFIRM_FN=getTokenState(address) — the
+      # generalized confirm path handles it (non-zero first word = real token).
+      manager: ""            # RHL2_BAGS_MANAGER  (the BagsLens contract)
       kind: curve
-      create_topic: ""       # env RHL2_BAGS_CREATE_TOPIC (blank => discovery)
+      create_topic: ""       # RHL2_BAGS_CREATE_TOPIC (blank => discovery)
+      token_arg: topic1
       boost: 12
+      # confirm_fn: "getTokenState(address)"   # or set RHL2_BAGS_CONFIRM_FN
     # Note: MetaLaunch (0x49A3D384cd90A58815df31C1852dB4095B90c0De) is pool-from-
     # day-one (no bonding curve), so DexScreener catches its tokens at launch —
     # no curve wiring needed.
