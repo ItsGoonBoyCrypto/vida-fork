@@ -486,115 +486,111 @@ class Scanner:
             lines.append(f"   manager. Set on Railway:  RHL2_FLAP_MANAGER={creator}")
         return "\n".join(lines)
 
-    async def curveprobe(self, token: str, delay: float = 0.35) -> str:
-        """Probe the flap Portal for a token's on-chain curve price/state.
+    async def curveprobe(self, token: str, delay: float = 1.2) -> str:
+        """Find a flap token's on-chain price getter — probe its CREATOR contract.
 
-        We don't have flap's ABI, so try a battery of common bonding-curve view
-        functions against the Portal (and the token itself) and report which
-        return data. Runs on the live host. Paste the output back and we pin the
-        real price getter to score flap tokens pre-graduation.
+        flap deploys each token from its own bonding-curve contract (the token's
+        creator), which is where the curve state/price lives — NOT the Portal. So
+        we resolve the creator via the explorer, then probe it (and the token)
+        with a FOCUSED set of getters, gently paced to survive the rate-limited
+        public RPC. Paste the output back and we pin the getter to price flap
+        tokens pre-graduation.
         """
         from .keccak import keccak256
+        import asyncio
         assert self._session is not None
-        portal = self.cfg._launchpad("flap")
-        portal = portal.get("manager") if portal else ""
-        if not portal:
-            return "no flap Portal configured (RHL2_FLAP_MANAGER / config)."
+        rpc_url = self.cfg.chain.rpc_url
+        amt = (10 ** 16).to_bytes(32, "big").hex()
         tok = token.lower().replace("0x", "").rjust(64, "0")
-        amt = (10 ** 18).to_bytes(32, "big").hex()   # 1e18 for quote fns
 
         def sel(sig: str) -> str:
             return keccak256(sig.encode()).hex()[:8]
 
-        # (signature, calldata-suffix) — target is Portal unless name endswith @token
-        addr_fns = [
-            "price", "getPrice", "currentPrice", "tokenPrice", "priceOf", "lastPrice",
-            "getTokenState", "tokenState", "getState", "state", "tokenInfo",
-            "getTokenInfo", "tokens", "getToken", "getReserves", "reserves",
-            "virtualReserves", "getReserve", "marketCap", "getMarketCap", "progress",
-            "getProgress", "bondingProgress", "getBondingCurve", "bondingCurve",
-            "curves", "getCurve", "getPool", "pools", "poolOf", "launchInfo",
-            "getLaunch", "launches", "getTokenData", "tokenData",
-        ]
-        quote_fns = ["quoteBuy", "quoteSell", "getAmountOut", "calculateBuy",
-                     "calculateSell", "getBuyPrice", "getSellPrice"]
-        token_noarg = ["price", "getPrice", "currentPrice", "reserves",
-                       "getReserves", "totalRaised", "progress", "marketCap"]
-
-        from .sources.poollistener import _backoff, _transient
-        stats = {"errors": 0}
-
         async def rpc(method, params):
             payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-            for attempt in range(4):
+            for attempt in range(3):           # fewer retries → smaller bursts
                 try:
-                    async with self._session.post(self.cfg.chain.rpc_url, json=payload) as r:
+                    async with self._session.post(rpc_url, json=payload) as r:
                         if r.status in (429, 503, 504):
-                            await _backoff(attempt)
+                            if delay:          # delay=0 in tests → no retry sleeps
+                                await asyncio.sleep(1.0 + attempt)
                             continue
                         if r.status != 200:
                             return None, f"HTTP {r.status}"
                         d = await r.json()
                         if isinstance(d, dict) and d.get("error"):
-                            msg = str(d["error"])
-                            if _transient(msg) and attempt < 3:
-                                await _backoff(attempt)
-                                continue
-                            return None, msg
+                            return None, str(d["error"])
                         return d.get("result"), None
                 except Exception as exc:  # noqa: BLE001
-                    if attempt < 3:
-                        await _backoff(attempt)
+                    if attempt < 2:
+                        if delay:
+                            await asyncio.sleep(1.0 + attempt)
                         continue
                     return None, str(exc)
-            return None, "rate-limited (exhausted retries)"
+            return None, "rate-limited"
 
-        async def call(target: str, data: str):
-            res, err = await rpc("eth_call", [{"to": target, "data": "0x" + data}, "latest"])
-            if err:
-                stats["errors"] += 1
-            return res
+        # Resolve the token's creator (the per-token curve contract) via Blockscout.
+        base = (self.cfg.chain.explorer_api_url or "").rstrip("/")
+        base = base + "/v2" if base.endswith("/api") else base
+        creator = ""
+        try:
+            async with self._session.get(f"{base}/addresses/{token}") as r:
+                d = await r.json() if r.status == 200 else {}
+            creator = (d.get("creator_address_hash") or d.get("creator_address") or "")
+        except Exception:  # noqa: BLE001
+            pass
+
+        lines = [f"=== CURVE PROBE {token} ===",
+                 f"creator (curve contract?): {creator or 'unknown'}"]
+        stats = {"errors": 0, "empties": 0}
 
         def interesting(res) -> bool:
             return bool(res) and res != "0x" and set(res.replace("0x", "")) != {"0"}
 
-        import asyncio
-        lines = [f"=== CURVE PROBE {token} ===", f"Portal: {portal}"]
-        # Confirm the token is a contract FIRST (reliably) — no point probing an
-        # EOA / wrong CA. Only trust a definitive '0x' (call succeeded).
-        tcode, terr = await rpc("eth_getCode", [token, "latest"])
-        if terr is None and (not tcode or tcode == "0x"):
-            lines.append("token is NOT a contract on-chain — double-check the CA "
-                         "(is it the token address, and did you copy it whole?).")
-            return "\n".join(lines)
-        if terr is not None:
-            lines.append(f"⚠️ couldn't verify token (RPC {terr}) — proceeding anyway.")
+        async def call(target, data):
+            res, err = await rpc("eth_call", [{"to": target, "data": "0x" + data}, "latest"])
+            if err:
+                stats["errors"] += 1
+            elif not interesting(res):
+                stats["empties"] += 1
+            return res
 
-        async def sweep(target, sigs, argsuffix):
-            nonlocal hits
-            for name, sig in sigs:
-                res = await call(target, sel(sig) + argsuffix)
-                if interesting(res):
-                    hits += 1
-                    lines.append(f"{name} → {res[:200]}")
-                if delay:
-                    await asyncio.sleep(delay)   # stay under the RPC rate limit
+        # Focused getters. no-arg = curve-on-creator/token; addr-arg = factory-style.
+        noarg = ["price", "getPrice", "currentPrice", "reserves", "getReserves",
+                 "virtualReserves", "getVirtualReserves", "getState", "state",
+                 "marketCap", "getMarketCap", "progress", "bondingCurve", "info"]
+        addr = ["getTokenState", "tokenState", "getPool", "getCurve", "getReserves",
+                "getInfo", "priceOf"]
 
         hits = 0
-        await sweep(portal, [(f"Portal.{n}(address)", f"{n}(address)") for n in addr_fns], tok)
-        await sweep(portal, [(f"Portal.{n}(address,uint256)", f"{n}(address,uint256)")
-                             for n in quote_fns], tok + amt)
-        await sweep(token, [(f"token.{n}()", f"{n}()") for n in token_noarg], "")
+
+        async def sweep(label, target, sigs, suffix):
+            nonlocal hits
+            for name in sigs:
+                res = await call(target, sel(f"{name}({'address' if suffix==tok else ''})") + suffix)
+                if interesting(res):
+                    hits += 1
+                    lines.append(f"{label}.{name}({'address' if suffix==tok else ''}) → {res[:260]}")
+                await asyncio.sleep(delay)
+
+        # Probe the creator first (most likely the curve), then the token.
+        if creator and creator.lower() != token.lower():
+            await sweep("creator", creator, noarg, "")
+            if not hits:
+                await sweep("creator", creator, addr, tok)
+        if not hits:
+            await sweep("token", token, noarg, "")
+
         lines.append("")
         if hits:
-            lines.append(f"{hits} getter(s) returned data — paste this back to pin pricing.")
-        elif stats["errors"] > len(addr_fns):
-            lines.append(f"⚠️ {stats['errors']} calls errored (RPC rate-limited) — inconclusive. "
-                         "Re-run /curveprobe in a minute when the RPC is quieter.")
+            lines.append(f"✅ {hits} getter(s) returned data — paste this back to pin pricing.")
+        elif stats["errors"] and not stats["empties"]:
+            lines.append(f"⚠️ {stats['errors']} calls rate-limited — re-run in a minute "
+                         "(the public RPC is throttling). This version paces slower.")
         else:
-            lines.append("No known getter returned data (calls succeeded, values empty). "
-                         "flap uses non-standard names or per-token curve contracts — "
-                         "grab the read function from the flap docs.")
+            lines.append(f"No known getter matched ({stats['empties']} empty, "
+                         f"{stats['errors']} errored). flap uses custom names — I'll need "
+                         "the read function from the flap bonding-curve dev docs.")
         return "\n".join(lines)
 
     async def _calibrate_one(self, ca: str) -> dict:
