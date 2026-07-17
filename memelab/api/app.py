@@ -20,12 +20,33 @@ def create_app(db: str = "memelab.db"):
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("pip install fastapi uvicorn to serve the API") from exc
 
+    from fastapi.responses import HTMLResponse
+    import os
+
     api = FastAPI(title="memelab", version="0.1")
     store = Store(db)
 
+    @api.get("/", response_class=HTMLResponse)
+    def dashboard():
+        here = os.path.dirname(__file__)
+        with open(os.path.join(here, "dashboard.html"), encoding="utf-8") as fh:
+            return fh.read()
+
     @api.get("/stats")
     def stats():
-        return store.coverage()
+        cov = store.coverage()
+        cov["smart_wallets"] = store.smart_wallet_count()
+        return cov
+
+    @api.get("/screen")
+    def screen(chain: str | None = Query(default=None), min_score: float = 0.0,
+               limit: int = 50):
+        from ..screener.engine import Screener, rank_live
+        sc = Screener(store)
+        if not sc.reload_signature():
+            return {"ready": False, "items": []}
+        ch = Chain(chain) if chain else None
+        return {"ready": True, "items": rank_live(store, sc, ch, min_score, limit)}
 
     @api.get("/signature")
     def signature():
@@ -60,7 +81,9 @@ def create_app(db: str = "memelab.db"):
 
 
 # Built on import when fastapi is available (uvicorn "memelab.api.app:app").
+# DB path from MEMELAB_DB so the dashboard service reads the collector's volume.
 try:  # pragma: no cover
-    app = create_app()
+    import os as _os
+    app = create_app(_os.environ.get("MEMELAB_DB", "memelab.db"))
 except Exception:  # noqa: BLE001 — fine; import stays safe without fastapi
     app = None

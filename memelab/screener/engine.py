@@ -80,3 +80,29 @@ class Screener:
             return 101.0                       # never alert without a validated signature
         # higher precision → we trust lower scores; floor at 55
         return max(55.0, 80.0 - 30.0 * self._sig.precision)
+
+
+def rank_live(store, screener: "Screener", chain=None, min_score: float = 0.0,
+              limit: int = 50, max_age_hours: float = 24.0) -> list:
+    """Score every live tracked token vs the signature, return top-ranked rows.
+
+    Backs the dashboard /screen endpoint. Chain-agnostic; reuses screen()."""
+    from ..models import Chain
+    if not screener.ready():
+        return []
+    out = []
+    for row in store.tracked_tokens(chain, max_age_hours=max_age_hours):
+        ts = store.time_series(Chain(row["chain"]), row["token_address"])
+        if not ts.snapshots:
+            continue
+        res = screener.screen(ts.chain, row["token_address"], ts.snapshots)
+        if res.score < min_score:
+            continue
+        s = res.snapshot
+        out.append({
+            "chain": s.chain.value, "symbol": s.symbol, "token": s.token_address,
+            "score": res.score, "market_cap": s.market_cap_usd,
+            "liquidity": s.liquidity_usd, "age_minutes": s.age_minutes,
+            "reasons": res.reasons, "pair": s.pair_address})
+    out.sort(key=lambda x: x["score"], reverse=True)
+    return out[:limit]

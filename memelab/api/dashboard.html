@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>memelab</title>
+<style>
+  :root {
+    --ground:#0d1418; --surface:#131d22; --surface2:#18242a; --ink:#e6ede9;
+    --muted:#8ba09b; --line:#24343a; --accent:#31c48d; --signal:#e0a83a;
+    --rh:#9a8dff; --sol:#3fe0c0; --eth:#7d97f0; --base:#5f95ff;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme:light){:root{
+    --ground:#f5f7f4;--surface:#fff;--surface2:#eef1ec;--ink:#12191d;--muted:#5c6b6a;
+    --line:#d9e0da;--accent:#12a06a;--signal:#b9791a;--rh:#6a5cff;--sol:#14b89a;--eth:#4b6bd6;--base:#2b6fff;}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);line-height:1.5}
+  .wrap{max-width:1080px;margin:0 auto;padding:2rem 1.25rem 4rem}
+  h1,h2{font-family:var(--mono);font-weight:600;letter-spacing:-.01em}
+  header{display:flex;align-items:baseline;gap:.9rem;border-bottom:1px solid var(--line);padding-bottom:1rem}
+  header h1{font-size:1.4rem;margin:0}
+  .live{font-family:var(--mono);font-size:.72rem;color:var(--accent);text-transform:uppercase;letter-spacing:.15em}
+  .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:2.2rem 0 .8rem}
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .tile{background:var(--surface);padding:1.1rem 1.2rem}
+  .tile .k{font-family:var(--mono);font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+  .tile .v{font-family:var(--mono);font-size:1.7rem;margin-top:.3rem;font-variant-numeric:tabular-nums}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:1.2rem 1.35rem}
+  .sig-head{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
+  .pill{font-family:var(--mono);font-size:.72rem;padding:.2rem .6rem;border-radius:999px;border:1px solid var(--line)}
+  .pill.learned{color:var(--accent);border-color:var(--accent)}
+  .pill.prior{color:var(--signal);border-color:var(--signal)}
+  .rules{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.9rem}
+  .rule{font-family:var(--mono);font-size:.75rem;background:var(--surface2);border:1px solid var(--line);border-radius:6px;padding:.25rem .55rem;color:var(--muted)}
+  .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+  table{border-collapse:collapse;width:100%;min-width:680px;font-size:.87rem}
+  th,td{text-align:left;padding:.7rem .9rem;border-bottom:1px solid var(--line)}
+  thead th{font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);background:var(--surface2)}
+  tbody tr:last-child td{border-bottom:none}
+  td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+  .chip{font-family:var(--mono);font-size:.7rem;padding:.12rem .5rem;border-radius:999px;color:#0d1418;font-weight:600}
+  .score{display:inline-flex;align-items:center;gap:.5rem;font-family:var(--mono)}
+  .bar{width:52px;height:6px;border-radius:3px;background:var(--surface2);overflow:hidden}
+  .bar > span{display:block;height:100%;background:var(--accent)}
+  .reasons{color:var(--muted);font-size:.8rem}
+  .empty{color:var(--muted);font-family:var(--mono);font-size:.85rem;padding:1.5rem;text-align:center}
+  a{color:var(--accent);text-decoration:none}
+  .muted{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>memelab</h1>
+    <span class="live" id="live">● live</span>
+    <span class="muted" style="margin-left:auto;font-family:var(--mono);font-size:.75rem" id="updated"></span>
+  </header>
+
+  <p class="eyebrow">Coverage</p>
+  <div class="tiles" id="tiles"></div>
+
+  <p class="eyebrow">Active signature</p>
+  <div class="card" id="sig"><span class="empty">loading…</span></div>
+
+  <p class="eyebrow">Live candidates — ranked by pump-likelihood</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Chain</th><th>Token</th><th>Score</th><th class="num">MCAP</th><th class="num">Liq</th><th class="num">Age</th><th>Why</th></tr></thead>
+    <tbody id="rows"><tr><td colspan="7" class="empty">loading…</td></tr></tbody>
+  </table></div>
+</div>
+
+<script>
+const CHAIN = {robinhood:'var(--rh)', solana:'var(--sol)', ethereum:'var(--eth)', base:'var(--base)'};
+const usd = n => n==null ? '—' : n>=1e6 ? '$'+(n/1e6).toFixed(2)+'M' : n>=1e3 ? '$'+(n/1e3).toFixed(0)+'k' : '$'+Math.round(n);
+const age = m => m==null ? '—' : m<60 ? m.toFixed(0)+'m' : m<1440 ? (m/60).toFixed(1)+'h' : (m/1440).toFixed(1)+'d';
+async function j(u){ try{const r=await fetch(u);return r.ok?await r.json():null;}catch(e){return null;} }
+
+async function refresh(){
+  const stats = await j('stats');
+  if(stats){
+    const t=[['tokens',stats.total_tokens],['snapshots',stats.total_snapshots],['smart wallets',stats.smart_wallets||0]];
+    for(const [c,v] of Object.entries(stats.by_chain||{})) t.push([c, (v.tokens||0)+' · '+(v.winners||0)+'W']);
+    document.getElementById('tiles').innerHTML = t.map(([k,v])=>`<div class="tile"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  }
+  const sig = await j('signature');
+  const se = document.getElementById('sig');
+  if(sig && sig.active){
+    const learned = sig.trained_on>0;
+    const rules = (sig.rules||[]).slice(0,10).map(r=>`<span class="rule">${r.feature} ${r.op} ${r.value}</span>`).join('');
+    se.innerHTML = `<div class="sig-head"><span class="pill ${learned?'learned':'prior'}">${learned?'learned':'bootstrap prior'}</span>`
+      + (sig.precision!=null?`<span class="muted" style="font-family:var(--mono);font-size:.8rem">precision ${(sig.precision*100).toFixed(0)}% · trained on ${sig.trained_on}</span>`:'')
+      + `</div><div class="rules">${rules}</div>`
+      + `<p class="reasons" style="margin:.8rem 0 0">${sig.notes||''}</p>`;
+  } else se.innerHTML = '<span class="empty">no signature yet — collecting</span>';
+
+  const scr = await j('screen?min_score=0&limit=40');
+  const rows = document.getElementById('rows');
+  if(scr && scr.items && scr.items.length){
+    rows.innerHTML = scr.items.map(it=>{
+      const col = CHAIN[it.chain]||'var(--muted)';
+      const chart = it.pair ? `https://dexscreener.com/${it.chain}/${it.pair}` : '#';
+      return `<tr>
+        <td><span class="chip" style="background:${col}">${it.chain}</span></td>
+        <td><b>$${it.symbol||'?'}</b><br><a href="${chart}" target="_blank" class="muted" style="font-size:.72rem">${it.token.slice(0,10)}…</a></td>
+        <td><span class="score"><span class="bar"><span style="width:${Math.min(100,it.score)}%"></span></span>${it.score.toFixed(0)}</span></td>
+        <td class="num">${usd(it.market_cap)}</td><td class="num">${usd(it.liquidity)}</td><td class="num">${age(it.age_minutes)}</td>
+        <td class="reasons">${(it.reasons||[]).slice(0,3).join(', ')}</td></tr>`;
+    }).join('');
+  } else rows.innerHTML = `<tr><td colspan="7" class="empty">${scr&&!scr.ready?'no signature yet — collecting':'no live candidates right now'}</td></tr>`;
+
+  document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+}
+refresh(); setInterval(refresh, 30000);
+</script>
+</body>
+</html>

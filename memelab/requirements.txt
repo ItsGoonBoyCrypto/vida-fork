@@ -1,2 +1,4 @@
 aiohttp>=3.9
-# Optional (only for the dashboard API): fastapi, uvicorn
+# Dashboard / API service (optional — the collector doesn't need these):
+fastapi>=0.110
+uvicorn>=0.27

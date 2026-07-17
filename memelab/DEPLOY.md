@@ -50,12 +50,25 @@ python -m memelab backtest                 # force a backtest now
 python -m memelab screen 0xTOKEN --chain base
 ```
 
-Optional dashboard API (separate service or local):
-```
-pip install fastapi uvicorn
-uvicorn "memelab.api.app:app" --host 0.0.0.0 --port 8000
-#  /stats  /signature  /token/{chain}/{addr}  /winners
-```
+## Dashboard (optional second service)
+
+A live web dashboard — coverage tiles, the active signature + its rules, and
+live candidates ranked by pump-likelihood (auto-refreshes every 30s).
+
+Run it as **another Railway service** off the same repo/image, sharing the
+**same Volume** (so it reads the collector's DB):
+1. New Service → same repo → Dockerfile Path `memelab/Dockerfile`.
+2. Attach the **same Volume** at `/app/data` (read side of the dataset).
+3. Settings → Deploy → **Custom Start Command**:
+   ```
+   uvicorn memelab.api.app:app --host 0.0.0.0 --port $PORT
+   ```
+   (set env `MEMELAB_DB=/app/data/memelab.db` if you customise the path)
+4. Railway gives it a public URL → open it for the dashboard.
+
+Endpoints: `/` (dashboard) · `/screen` · `/signature` · `/stats` · `/winners`
+· `/token/{chain}/{addr}`. Locally: `uvicorn memelab.api.app:app` then visit
+`http://localhost:8000`.
 
 ## Notes
 
