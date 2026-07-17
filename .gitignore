@@ -39,6 +39,8 @@ venv/
 rhl2_scanner/config/config.yaml
 scanner.db
 *.sqlite
+*.db
+memelab.db
 # ...but DO ship the env template (it holds no secrets)
 !rhl2_scanner/.env.example
 
