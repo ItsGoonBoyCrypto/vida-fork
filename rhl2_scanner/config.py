@@ -349,6 +349,11 @@ class RuntimeConfig:
     early_launch_max_age_minutes: float = 60      # only tokens this new
     early_launch_min_liquidity_usd: float = 3000  # confirm a real (graduated) pool
     early_launch_require_safety: bool = True       # still require the safety gate to pass
+    # Quality gates so the 🌱 early path isn't just "safe + has a pool" (that
+    # floods). 0 = disabled; when a metric is known it must clear the bar.
+    early_launch_min_holders: int = 0             # require real distribution, not a dead launch
+    early_launch_min_buy_ratio_1h: float = 0.0    # require net buying (0-1), when txn data exists
+    early_launch_min_volume_1h_usd: float = 0.0   # require some real 1h volume, when known
 
     # --- Paper trading / calibration ---
     paper_mode: bool = False                   # record would-be entries + realized outcomes

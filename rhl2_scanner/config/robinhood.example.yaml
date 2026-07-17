@@ -102,10 +102,12 @@ tiers:
     thresholds:
       max_age_minutes: 1440         # < 24h
       min_age_minutes: 0
-      # --- Sub-$100K early-gem tuning (open the gates for small fresh tokens) ---
-      min_liquidity_usd: 2000       # was 5000 — early gems have thin liquidity
-      thin_liquidity_usd: 2000      # hard-skip floor
-      min_market_cap_usd: 4000      # was 40000 — THE fix: 40k skipped every sub-40k gem
+      # --- Sub-$100K early-gem tuning (small fresh tokens, but not dust) ---
+      # Tightened after alert-volume feedback: floors raised so thin/dead launches
+      # stop qualifying, while still well inside sub-$100K gem territory.
+      min_liquidity_usd: 3500       # was 2000 — cut the thin/dead pools
+      thin_liquidity_usd: 3500      # hard-skip floor
+      min_market_cap_usd: 8000      # was 4000 — skip the dust; real gems clear this fast
       max_market_cap_usd: 150000    # was 1M — focus on sub-100k gems (50k headroom)
       max_top10_pct: 15             # top10 scoring reason threshold
       skip_top10_pct: 75            # was 60 — brand-new tokens are naturally concentrated
@@ -121,9 +123,9 @@ tiers:
       ideal_mcap_low: 15000
       ideal_mcap_high: 100000
       ideal_holders: 120            # was 300 — small gems reach full holder score sooner
-      min_volume_24h_usd: 2500      # was 10000 — don't over-penalise low-volume early
-      min_buy_ratio_1h: 0.60
-      strong_buy_ratio_1h: 0.70
+      min_volume_24h_usd: 6000      # was 2500 — require real trading, not a ghost token
+      min_buy_ratio_1h: 0.62        # was 0.60 — a touch more net-buy conviction
+      strong_buy_ratio_1h: 0.72     # was 0.70
       # Short-term velocity: last-5-min volume rate vs the trailing 1h rate.
       # This is the EARLIEST momentum tell — moves within minutes of launch.
       # 1.2 = last 5 min running 20% hotter than the hour; 2.0 = surging (2x).
@@ -132,7 +134,7 @@ tiers:
       min_external_risk_score: 60
       smart_money_min_wallets: 2
       strong_alert_score: 75        # >= 75 = Strong alert
-      watch_alert_score: 50         # 50-74 = Watch (early tokens score lower on thin data)
+      watch_alert_score: 63         # was 50 — raised to cut the Watch-band flood
 
 runtime:
   poll_interval_seconds: 20
@@ -149,9 +151,14 @@ runtime:
   # have thin data and can't reach the maturity score, so we alert on SAFE +
   # fresh + a real pool instead. Widened to catch more small early gems.
   early_launch_enabled: true
-  early_launch_max_age_minutes: 180     # was 60 — catch gems up to 3h old
-  early_launch_min_liquidity_usd: 1500  # was 3000 — smaller early pools count
+  early_launch_max_age_minutes: 90      # was 180 — tighter window cuts stale-launch noise
+  early_launch_min_liquidity_usd: 3500  # was 1500 — a real pool, not dust
   early_launch_require_safety: true     # still require the safety gate to pass
+  # Quality gates so 🌱 isn't just "safe + has a pool" (that was the flood). Each
+  # only bites when the metric is known, so genuinely-fresh thin data still passes.
+  early_launch_min_holders: 25          # reject dead launches (a handful of holders)
+  early_launch_min_buy_ratio_1h: 0.55   # require net buying when txns exist
+  early_launch_min_volume_1h_usd: 800   # require some real 1h volume when known
   # Live alerts on RH Chain today: strict on all confirmable metrics (verified,
   # authorities revoked, LP burned, top10/holders/bundle/momentum) + router-free
   # honeypot check; tolerates unconfirmed tax until a V3 router/oracle is wired.

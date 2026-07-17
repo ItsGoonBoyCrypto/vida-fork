@@ -1700,6 +1700,18 @@ class Scanner:
             return False
         if rc.early_launch_require_safety and not result.safety_passed:
             return False
+        # Quality gates — reject dead/quiet launches (the main source of noise).
+        # Each applies only when the metric is known, so thin brand-new data still
+        # passes; a token with data that FAILS the bar is filtered.
+        if rc.early_launch_min_holders and snap.holder_count is not None \
+                and snap.holder_count < rc.early_launch_min_holders:
+            return False
+        if rc.early_launch_min_buy_ratio_1h and snap.buy_ratio_1h is not None \
+                and snap.buy_ratio_1h < rc.early_launch_min_buy_ratio_1h:
+            return False
+        if rc.early_launch_min_volume_1h_usd and snap.volume_1h is not None \
+                and snap.volume_1h < rc.early_launch_min_volume_1h_usd:
+            return False
         return True
 
     async def _enrich(self, snap: TokenSnapshot) -> None:
