@@ -486,7 +486,7 @@ class Scanner:
             lines.append(f"   manager. Set on Railway:  RHL2_FLAP_MANAGER={creator}")
         return "\n".join(lines)
 
-    async def curveprobe(self, token: str, delay: float = 1.2) -> str:
+    async def curveprobe(self, token: str, delay: float = 1.2, func: str = "") -> str:
         """Find a flap token's on-chain price getter — probe its CREATOR contract.
 
         flap deploys each token from its own bonding-curve contract (the token's
@@ -495,6 +495,10 @@ class Scanner:
         with a FOCUSED set of getters, gently paced to survive the rate-limited
         public RPC. Paste the output back and we pin the getter to price flap
         tokens pre-graduation.
+
+        With ``func`` (e.g. /curveprobe 0x.. reserves) probe ONLY that function —
+        a single call, which survives the rate limit where the full sweep can't.
+        Use this once you have the function name from the flap docs.
         """
         from .keccak import keccak256
         import asyncio
@@ -554,6 +558,35 @@ class Scanner:
             elif not interesting(res):
                 stats["empties"] += 1
             return res
+
+        # Single-function mode: probe ONLY this getter — 2-3 calls survive the rate
+        # limit where the 35-call sweep can't. Try no-arg on creator + token, then
+        # addr-arg on the creator (factory-style: getter(token)).
+        if func:
+            name = func.replace("(", "").replace(")", "").strip()
+            targets = []
+            if creator and creator.lower() != token.lower():
+                targets.append(("creator", creator, "", ""))
+            targets.append(("token", token, "", ""))
+            if creator and creator.lower() != token.lower():
+                targets.append(("creator", creator, "address", tok))
+            fhits = 0
+            for label, target, arg, suffix in targets:
+                res = await call(target, sel(f"{name}({arg})") + suffix)
+                if interesting(res):
+                    fhits += 1
+                    lines.append(f"{label}.{name}({arg}) → {res[:260]}")
+                if delay:
+                    await asyncio.sleep(delay)
+            lines.append("")
+            if fhits:
+                lines.append(f"✅ {name}() returned data — paste this back to pin pricing.")
+            elif stats["errors"] and not stats["empties"]:
+                lines.append(f"⚠️ {name}() rate-limited — re-run in a minute.")
+            else:
+                lines.append(f"{name}() matched nothing ({stats['empties']} empty, "
+                             f"{stats['errors']} errored) — try another name or arg shape.")
+            return "\n".join(lines)
 
         # Focused getters. no-arg = curve-on-creator/token; addr-arg = factory-style.
         noarg = ["price", "getPrice", "currentPrice", "reserves", "getReserves",
@@ -787,7 +820,8 @@ class Scanner:
             "<b>Research &amp; tuning</b>",
             "<code>/wallet 0xWallet</code> — what tokens a wallet recently bought",
             "<code>/deployer 0xToken</code> — who created a token (finds a launchpad's manager)",
-            "<code>/curveprobe 0xToken</code> — probe flap Portal for a token's on-chain price",
+            "<code>/curveprobe 0xToken [fn]</code> — probe a flap token's on-chain price "
+            "(add a fn name, e.g. <code>reserves</code>, for a single rate-limit-proof call)",
             "<code>/calibrate 0xCA1 0xCA2 …</code> — tune thresholds against your known winners",
             "",
             "<i>Alerts you'll get: 🚨 Gem / 👀 Watch / 🌱 Early · 🔼 Upgrades · "
@@ -949,9 +983,10 @@ class Scanner:
             if not valid_ca:
                 await self._send_html("Usage: <code>/curveprobe 0x&lt;flap token&gt;</code>")
                 return
+            func = parts[2] if len(parts) > 2 else ""   # /curveprobe 0x.. reserves → single-call
             try:
                 from html import escape as _esc
-                await self._send_html("<pre>" + _esc(await self.curveprobe(arg)) + "</pre>")
+                await self._send_html("<pre>" + _esc(await self.curveprobe(arg, func=func)) + "</pre>")
             except Exception as exc:
                 await self._send_html("curveprobe failed: " + __import__("html").escape(str(exc)))
         elif cmd in ("deployer", "creator"):

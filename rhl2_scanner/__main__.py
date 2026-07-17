@@ -106,7 +106,7 @@ async def _wallet(cfg: Config, addr: str) -> None:
         scanner.storage.close()
 
 
-async def _curveprobe(cfg: Config, token: str) -> None:
+async def _curveprobe(cfg: Config, token: str, func: str = "") -> None:
     import aiohttp
     from .scanner import Scanner
 
@@ -114,7 +114,7 @@ async def _curveprobe(cfg: Config, token: str) -> None:
     scanner._session = aiohttp.ClientSession(
         timeout=aiohttp.ClientTimeout(total=cfg.runtime.request_timeout_seconds))
     try:
-        print(await scanner.curveprobe(token))
+        print(await scanner.curveprobe(token, func=func))
     finally:
         await scanner._session.close()
         scanner.storage.close()
@@ -247,6 +247,7 @@ def main(argv=None) -> int:
     parser.add_argument("--tier", choices=["sniper", "momentum"])
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--win-multiple", type=float, default=2.0, help="paper-report win threshold")
+    parser.add_argument("--func", default="", help="curveprobe: probe only this getter (1 call)")
     args = parser.parse_args(argv)
 
     cfg = _load(args)
@@ -304,7 +305,7 @@ def main(argv=None) -> int:
         if not args.dataset:
             print("curveprobe requires a token address: curveprobe 0x...", file=sys.stderr)
             return 2
-        asyncio.run(_curveprobe(cfg, args.dataset))
+        asyncio.run(_curveprobe(cfg, args.dataset, args.func))
     elif args.command == "calibrate":
         if not args.dataset:
             print("calibrate requires a file of winner CAs (one per line) or a "

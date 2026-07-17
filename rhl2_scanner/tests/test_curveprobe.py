@@ -57,6 +57,31 @@ class TestCurveProbe(unittest.IsolatedAsyncioTestCase):
         finally:
             sc.storage.close()
 
+    async def test_single_function_mode(self):
+        sc = self._sc()
+        reserves_sel = _sel("reserves()")
+        calls = {"n": 0}
+
+        class FakeSession:
+            def get(self, url):
+                return _Resp({"creator_address_hash": CREATOR})
+            def post(self, url, json):
+                calls["n"] += 1
+                p = json["params"][0]
+                if (p["to"].lower() == CREATOR and p["data"][2:10] == reserves_sel):
+                    return _Resp({"result": "0x" + "0" * 63 + "5"})
+                return _Resp({"result": "0x"})
+
+        sc._session = FakeSession()  # type: ignore
+        try:
+            out = await sc.curveprobe(TOKEN, delay=0, func="reserves")
+            self.assertIn("creator.reserves()", out)
+            self.assertIn("returned data", out)
+            # single-function mode is a handful of calls, not the full sweep
+            self.assertLessEqual(calls["n"], 3)
+        finally:
+            sc.storage.close()
+
     async def test_rate_limited_summary(self):
         sc = self._sc()
 
