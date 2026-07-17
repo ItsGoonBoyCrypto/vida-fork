@@ -87,17 +87,17 @@ chain:
       token_arg: topic1
       boost: 12
     - name: bags
-      # bags.fm curve → Uniswap v4 with locked LP. State read: BagsLens.getTokenState(
-      # token) → (curve, feeShare, poolId, migrated, …); `Migrated` graduation event.
-      # To enable: set RHL2_BAGS_MANAGER to the BagsLens address (grab it from the
-      # Bags RH deploy) and RHL2_BAGS_CONFIRM_FN=getTokenState(address) — the
-      # generalized confirm path handles it (non-zero first word = real token).
-      manager: ""            # RHL2_BAGS_MANAGER  (the BagsLens contract)
+      # bags.fm — FULLY WIRED. Discovery uses the BagsFactory registry
+      # (allTokensLength + getTokens tail — no log/topic needed); pricing uses
+      # BagsLens.getTokenState(token) → exists/migrated/price/progress/reserves.
+      # Enable with TWO host Variables (grab both from the Bags RH deploy):
+      #   RHL2_BAGS_MANAGER  = the BagsLens address   (or RHL2_BAGS_LENS)
+      #   RHL2_BAGS_FACTORY  = the BagsFactory address (enables registry discovery)
+      manager: ""            # RHL2_BAGS_MANAGER / RHL2_BAGS_LENS  (BagsLens)
+      factory: ""            # RHL2_BAGS_FACTORY  (BagsFactory registry)
       kind: curve
-      create_topic: ""       # RHL2_BAGS_CREATE_TOPIC (blank => discovery)
-      token_arg: topic1
       boost: 12
-      # confirm_fn: "getTokenState(address)"   # or set RHL2_BAGS_CONFIRM_FN
+      confirm_fn: "getTokenState(address)"
     # Note: MetaLaunch (0x49A3D384cd90A58815df31C1852dB4095B90c0De) is pool-from-
     # day-one (no bonding curve), so DexScreener catches its tokens at launch —
     # no curve wiring needed.

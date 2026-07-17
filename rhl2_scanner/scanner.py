@@ -44,6 +44,7 @@ from .sources.chain import EvmChainClient
 from .sources.dexscreener import DexScreenerClient
 from .sources.poollistener import PoolListener
 from .sources.launchpad_curve import LaunchpadCurveListener
+from .sources.bags import BagsClient
 from .sources.safety import CompositeSafetySource
 from .sources.smartmoney import SmartMoneyClient
 from .storage import Storage
@@ -139,6 +140,8 @@ class Scanner:
         # Cached pre-migration curve profile (learned winning setup, else prior).
         self._curve_profile: Optional[dict] = None
         self._curve_profile_ts: Optional[float] = None
+        # Bags launchpad: registry discovery cursor (last-seen token count).
+        self._bags_last_total: Optional[int] = None
         # Merge any persisted smart-money wallets (from prior /smart or autoseed)
         # into the config set so they take effect this run.
         self._merge_persisted_smart_wallets()
@@ -793,6 +796,101 @@ class Scanner:
         snap.market_cap_usd = price_usd * circ
         snap.liquidity_usd = (st["reserve"] / e18) * rate
 
+    # -- Bags launchpad (registry discovery + curve pricing) ------------
+
+    def _bags(self) -> Optional["BagsClient"]:
+        """A BagsClient bound to the session, or None if Bags isn't configured."""
+        if self._session is None:
+            return None
+        lp = self.cfg._launchpad("bags") or {}
+        lens = str(lp.get("manager") or "").strip()
+        factory = str(lp.get("factory") or "").strip()
+        if not lens and not factory:
+            return None
+        return BagsClient(self.cfg, self._session, lens=lens, factory=factory)
+
+    async def _poll_bags(self) -> list[TokenSnapshot]:
+        """Discover new Bags launches from the factory registry tail."""
+        bags = self._bags()
+        if bags is None or not bags.can_discover():
+            return []
+        try:
+            toks, total = await bags.newest_tokens(
+                limit=25, known_total=self._bags_last_total)
+        except Exception:
+            log.debug("bags discovery failed", exc_info=True)
+            return []
+        first_run = self._bags_last_total is None
+        self._bags_last_total = total
+        if first_run or not toks:
+            return []   # on cold start just set the cursor; don't flood with history
+        out = []
+        for t in toks:
+            out.append(TokenSnapshot(
+                chain=self.cfg.chain.dexscreener_chain, pair_address="",
+                token_address=t, age_minutes=0.0, launchpad="bags"))
+        log.info("bags: %d new launch(es) from registry (total=%d)", len(out), total)
+        return out
+
+    async def bags_state(self, token: str) -> dict:
+        """Read a Bags token's on-curve state (for /bagsstate + enrichment)."""
+        bags = self._bags()
+        if bags is None or not bags.can_price():
+            return {"ok": False, "error": "Bags not configured (set RHL2_BAGS_MANAGER=<lens>)"}
+        st = await bags.token_state(token)
+        if st is None:
+            return {"ok": False, "error": "no state (rate-limited or lens wrong)"}
+        if not st.get("exists"):
+            return {"ok": False, "error": "not a Bags token (exists=false)"}
+        return {"ok": True, **st}
+
+    async def _enrich_bags_curve(self, snap: TokenSnapshot) -> None:
+        """Price a Bags token still on the curve, via BagsLens.getTokenState."""
+        if snap.market_cap_usd:                      # already priced (listed/migrated)
+            return
+        bags = self._bags()
+        if bags is None or not bags.can_price():
+            return
+        st = await bags.token_state(snap.token_address)
+        if not st or not st.get("exists") or st.get("migrated"):
+            return                                    # not Bags, or already on the pool
+        snap.launchpad = snap.launchpad or "bags"
+        snap.curve_progress_pct = float(st.get("bondingProgressPct") or 0)
+        e18 = 10 ** 18
+        rate = self._eth_usd_rate()
+        if not rate:
+            return
+        price_usd = (st.get("priceQuotePerToken", 0) / e18) * rate
+        snap.price_native = st.get("priceQuotePerToken", 0) / e18
+        snap.price_usd = price_usd
+        snap.liquidity_usd = (st.get("realQuoteReserves", 0) / e18) * rate
+        # Circulating ≈ tokens sold off the curve = virtual - real token reserves;
+        # mcap = spot price × circulating (both 18-dec), a sound curve-phase proxy.
+        circ = max(0, st.get("virtualTokenReserves", 0) - st.get("realTokenReserves", 0))
+        if circ:
+            snap.market_cap_usd = price_usd * (circ / e18)
+
+    def bagsstate_report(self, token: str, st: dict) -> str:
+        if not st.get("ok"):
+            return f"=== BAGS STATE {token} ===\n❌ {st.get('error', 'unknown')}"
+        e18 = 10 ** 18
+        price_eth = st.get("priceQuotePerToken", 0) / e18
+        resv = st.get("realQuoteReserves", 0) / e18
+        thr = st.get("thresholdQuote", 0) / e18
+        prog = st.get("bondingProgressPct", 0)
+        return "\n".join([
+            f"=== BAGS STATE {token} ===",
+            f"status: {'MIGRATED (on DEX)' if st.get('migrated') else 'on curve'}",
+            f"graduation: {prog}%  ({st.get('totalRaised',0)/e18:.4f} / {thr:.4f} ETH)",
+            f"price: {price_eth:.12f} ETH/token",
+            f"reserves: {resv:.6f} ETH  (real quote)",
+            f"curve: {st.get('curve','?')}",
+            "",
+            ("→ on the curve — this is the pre-graduation pricing we score."
+             if not st.get("migrated") else
+             "→ migrated — read live price from the Uniswap v4 pool / DexScreener."),
+        ])
+
     # -- pre-migration curve pattern ------------------------------------
 
     def _active_curve_profile(self) -> dict:
@@ -814,9 +912,9 @@ class Scanner:
         return self._curve_profile
 
     def _is_on_curve(self, snap: TokenSnapshot) -> bool:
-        """A flap token still on the bonding curve (priced by getTokenV2, no DEX)."""
+        """A token still on a bonding curve (priced pre-graduation, no DEX pair)."""
         return (snap.curve_progress_pct is not None
-                and (snap.launchpad or "") == "flap")
+                and (snap.launchpad or "") in ("flap", "bags"))
 
     async def _track_curve(self, snap: TokenSnapshot) -> None:
         """Observe an on-curve token, match it to the winning profile, maybe alert."""
@@ -1161,6 +1259,8 @@ class Scanner:
             "<code>/deployer 0xToken</code> — who created a token (finds a launchpad's manager)",
             "<code>/flapstate 0xToken</code> — live flap curve price + graduation progress "
             "(one call, Portal getTokenV2)",
+            "<code>/bagsstate 0xToken</code> — live Bags curve price + graduation progress "
+            "(BagsLens getTokenState)",
             "<code>/curvepattern</code> — the learned pre-migration winning-setup profile "
             "+ 🧬 match progress",
             "<code>/curveprobe 0xToken [fn]</code> — raw getter probe (fallback; add a fn name "
@@ -1342,6 +1442,17 @@ class Scanner:
                 await self._send_html("<pre>" + _esc(await self.flapstate(arg)) + "</pre>")
             except Exception as exc:
                 await self._send_html("flapstate failed: " + __import__("html").escape(str(exc)))
+        elif cmd in ("bagsstate", "bags"):
+            if not valid_ca:
+                await self._send_html("Usage: <code>/bagsstate 0x&lt;bags token&gt;</code> "
+                                      "— live Bags curve price + graduation progress")
+                return
+            try:
+                from html import escape as _esc
+                st = await self.bags_state(arg)
+                await self._send_html("<pre>" + _esc(self.bagsstate_report(arg, st)) + "</pre>")
+            except Exception as exc:
+                await self._send_html("bagsstate failed: " + __import__("html").escape(str(exc)))
         elif cmd in ("curvepattern", "pattern"):
             try:
                 from html import escape as _esc
@@ -1542,11 +1653,14 @@ class Scanner:
         # Three discovery streams: DexScreener (indexed), DEX factory logs
         # (earliest pool), and bonding-curve launchpad logs (earliest of all —
         # flap tokens before they graduate to a pool DexScreener can see).
-        dex_pairs, fresh_pairs, curve_stubs = await asyncio.gather(
+        dex_pairs, fresh_pairs, curve_stubs, bags_stubs = await asyncio.gather(
             dex.fetch_new_pairs(),
             self._listener.poll_new_pairs(),
             self._curve_listener.poll_new_launches(),
+            self._poll_bags(),
         )
+        # Bags registry stubs join the curve stubs (both are pre-graduation).
+        curve_stubs = list(curve_stubs) + list(bags_stubs)
 
         # Merge, DexScreener winning on overlap (it carries market data). For
         # factory-only stubs, try to backfill market data from DexScreener.
@@ -1949,9 +2063,11 @@ class Scanner:
                 log.debug("enrichment source failed: %s", exc)
                 return None
 
-        # flap tokens still on the curve have no DexScreener market — price them
-        # from the Portal so the scorer can rank them pre-graduation.
+        # flap/Bags tokens still on the curve have no DexScreener market — price
+        # them from the launchpad so the scorer can rank them pre-graduation.
         await _safe(self._enrich_flap_curve(snap))
+        if not snap.market_cap_usd:
+            await _safe(self._enrich_bags_curve(snap))
 
         # Composite safety (GoPlus + on-chain + honeypot sim) merged conservatively.
         # Bundle analysis also writes into snap.safety, so run it first, then

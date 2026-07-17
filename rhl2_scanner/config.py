@@ -163,7 +163,8 @@ class ChainConfig:
         {"name": "robinfun", "manager": "", "kind": "curve",
          "create_topic": "", "graduate_topic": "", "boost": 12, "confirm_fn": ""},
         {"name": "bags", "manager": "", "kind": "curve",
-         "create_topic": "", "graduate_topic": "", "boost": 12, "confirm_fn": ""},
+         "create_topic": "", "graduate_topic": "", "boost": 12,
+         "confirm_fn": "getTokenState(address)", "factory": ""},
     ])
 
     # --- Third-party safety API (RugCheck-equivalent for EVM) ---
@@ -567,6 +568,18 @@ class Config:
                 lp["graduate_topic"] = v.strip()
             if v := env.get(f"RHL2_{nm}_CONFIRM_FN"):
                 lp["confirm_fn"] = v.strip()
+            if v := env.get(f"RHL2_{nm}_FACTORY"):   # Bags-style registry discovery
+                if _looks_like_address(v):
+                    lp["factory"] = v.strip()
+                else:
+                    _log.warning("RHL2_%s_FACTORY=%r is not a 0x address — ignoring", nm, v)
+        # RHL2_BAGS_LENS is a clearer alias for the Bags launchpad 'manager'.
+        bags = self._launchpad("bags")
+        if bags is not None and (v := env.get("RHL2_BAGS_LENS")):
+            if _looks_like_address(v):
+                bags["manager"] = v.strip()
+            else:
+                _log.warning("RHL2_BAGS_LENS=%r is not a 0x address — ignoring", v)
         # Whale wallets to watch — comma-separated 0x addresses (easy Railway var).
         if v := env.get("RHL2_WATCH_WALLETS"):
             self.wallet_watch.wallets = [w.strip().lower() for w in v.split(",") if w.strip()]
