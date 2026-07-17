@@ -219,11 +219,15 @@ def score_discovery(t: TokenSnapshot, th: Thresholds, weight: float) -> Category
     # Bonding-curve tokens caught pre-graduation are the earliest possible entry.
     # Reward the sweet spot: enough traction to be real, not yet graduated.
     if t.curve_progress_pct is not None:
-        if 20.0 <= t.curve_progress_pct < 100.0:
-            pts += 12
-            cs.reasons.append(f"curve {t.curve_progress_pct:.0f}% (pre-grad)")
-        elif t.curve_progress_pct < 20.0:
+        p = t.curve_progress_pct
+        if p < 20.0:
             pts += 4  # very fresh, unproven
+        elif th.grad_sweet_low <= p <= th.grad_sweet_high:
+            pts += 15
+            cs.reasons.append(f"curve {p:.0f}% — graduation imminent")
+        elif p < 100.0:
+            pts += 12
+            cs.reasons.append(f"curve {p:.0f}% (pre-grad)")
 
     # Smart money
     n_smart = len(t.smart_money_wallets)
@@ -252,6 +256,24 @@ def score_discovery(t: TokenSnapshot, th: Thresholds, weight: float) -> Category
 # ---------------------------------------------------------------------------
 # Composite
 # ---------------------------------------------------------------------------
+def _graduation_bonus(t: TokenSnapshot, th: Thresholds) -> float:
+    """Composite bonus for a bonding-curve token near graduation (the sweet spot).
+
+    Pre-graduation flap tokens have no DEX pair, so their momentum categories are
+    thin — this bonus lets a genuinely-imminent one reach the alert band. Full
+    points in [grad_sweet_low, grad_sweet_high]; half once it's basically
+    graduating (window closing); nothing below the sweet spot or off-curve.
+    """
+    p = t.curve_progress_pct
+    if p is None:
+        return 0.0
+    if th.grad_sweet_low <= p <= th.grad_sweet_high:
+        return th.grad_boost_points
+    if p > th.grad_sweet_high:
+        return th.grad_boost_points * 0.5
+    return 0.0
+
+
 def score_token(t: TokenSnapshot, cfg: Config, strict_safety: bool = True,
                 pragmatic: bool = False) -> ScoreResult:
     th = cfg.thresholds
@@ -276,7 +298,7 @@ def score_token(t: TokenSnapshot, cfg: Config, strict_safety: bool = True,
             gate_failures=gate.failures,
         )
 
-    composite = _clamp(sum(c.weighted for c in categories))
+    composite = _clamp(sum(c.weighted for c in categories) + _graduation_bonus(t, th))
 
     if composite >= th.strong_alert_score:
         level = AlertLevel.STRONG

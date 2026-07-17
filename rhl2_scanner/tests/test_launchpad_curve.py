@@ -102,9 +102,15 @@ class TestDiscoveryBoost(unittest.TestCase):
     def test_curve_pregrad_sweetspot_boost(self):
         cfg = Config()
         w = cfg.weights.normalized().discovery
+        # 60% is in the graduation-imminent sweet spot (55-92%)
         sweet = score_discovery(self._snap(launchpad="flap", curve_progress_pct=60),
                                 cfg.thresholds, w)
-        self.assertTrue(any("pre-grad" in r for r in sweet.reasons))
+        self.assertTrue(any("graduation imminent" in r for r in sweet.reasons))
+        # 30% is pre-grad but below the sweet spot → lower discovery raw
+        early = score_discovery(self._snap(launchpad="flap", curve_progress_pct=30),
+                                cfg.thresholds, w)
+        self.assertTrue(any("pre-grad" in r for r in early.reasons))
+        self.assertGreater(sweet.raw, early.raw)
 
 
 class TestAddrNormalization(unittest.TestCase):

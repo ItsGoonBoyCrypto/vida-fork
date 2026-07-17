@@ -135,6 +135,12 @@ tiers:
       smart_money_min_wallets: 2
       strong_alert_score: 75        # >= 75 = Strong alert
       watch_alert_score: 63         # was 50 — raised to cut the Watch-band flood
+      # Graduation-imminent boost: a flap token 55-92% bonded is at the sweet spot
+      # where the run often starts, but has no DEX pair yet (thin momentum data).
+      # These composite points let a genuinely-imminent one reach the alert band.
+      grad_sweet_low: 55
+      grad_sweet_high: 92
+      grad_boost_points: 10
 
 runtime:
   poll_interval_seconds: 20

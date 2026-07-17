@@ -244,6 +244,14 @@ class Thresholds:
     strong_alert_score: float = 75.0
     watch_alert_score: float = 60.0
 
+    # Graduation-imminent boost: a bonding-curve token this far along is at the
+    # sweet spot where the run often starts, but has thin DEX momentum data (no
+    # pair yet) so it can't otherwise reach the alert band. Add composite points
+    # for the sweet spot; half that once it's essentially graduating.
+    grad_sweet_low: float = 55.0
+    grad_sweet_high: float = 92.0
+    grad_boost_points: float = 10.0
+
 
 @dataclass
 class TierConfig:
