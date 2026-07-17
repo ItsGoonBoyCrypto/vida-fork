@@ -33,8 +33,10 @@ from ..keccak import keccak256
 from ..models import TokenSnapshot
 from .poollistener import _backoff, _transient
 
-# selector for the flap Portal read function getTokenV2(address)
-_GET_TOKEN_V2 = keccak256(b"getTokenV2(address)").hex()[:8]
+
+def _selector(fn: str) -> str:
+    """4-byte selector for a read fn signature like 'getTokenV2(address)'."""
+    return keccak256(fn.strip().encode()).hex()[:8]
 
 log = logging.getLogger("rhl2.launchpad_curve")
 
@@ -181,6 +183,7 @@ class LaunchpadCurveListener:
         create_topic = (lp.get("create_topic") or "").strip()
         token_arg = lp.get("token_arg") or "topic1"
         suffixes = [str(s).lower() for s in (lp.get("token_suffixes") or [])]
+        confirm_fn = (lp.get("confirm_fn") or "").strip()
         name = lp.get("name", "launchpad")
         skip = {manager.lower(), (self.chain.weth_address or "").lower()}
 
@@ -208,27 +211,30 @@ class LaunchpadCurveListener:
                     tok = _extract_token(entry, token_arg)
                     if tok:
                         _emit(tok)
-                elif suffixes:                         # vanity-suffix matching (free)
+                elif suffixes or confirm_fn:           # suffix (free) + confirm fallback
                     matched = set()
                     for tok in _tokens_by_suffix(entry, suffixes):
                         _emit(tok)
                         matched.add(tok.lower())
-                    # Non-vanity flap tokens (e.g. $meow, no 8888/7777 suffix) show
-                    # up as candidates too — confirm the unmatched ones via
-                    # getTokenV2, bounded by the per-cycle budget + a one-shot cache.
-                    await self._confirm_nonvanity(manager, entry, matched, skip, _emit)
+                    # Non-vanity tokens (e.g. flap's $meow, no 8888/7777 suffix)
+                    # appear as candidates too — confirm the unmatched ones via the
+                    # launchpad's read fn, bounded by the per-cycle budget + cache.
+                    if confirm_fn:
+                        await self._confirm_nonvanity(
+                            manager, entry, matched, skip, _emit, _selector(confirm_fn))
                 else:                                  # pure discovery logging
                     self._discover(name, entry)
             start = end + 1
 
     async def _confirm_nonvanity(self, manager: str, entry: dict, matched: set,
-                                 skip: set, emit) -> None:
-        """Confirm non-suffix candidates as flap tokens via Portal.getTokenV2.
+                                 skip: set, emit, selector: str) -> None:
+        """Confirm non-suffix candidates as this launchpad's tokens via a read fn.
 
         Only the addresses that didn't match a vanity suffix, bounded by the
-        per-cycle budget and a permanent cache so each is checked at most once.
-        A candidate for which getTokenV2 returns a valid (non-Invalid) status is
-        a real flap token regardless of its address shape → emit it.
+        per-cycle budget and a permanent cache (keyed by manager) so each is
+        checked at most once. A candidate for which the manager's read fn returns
+        a valid (non-zero) first word is a real token here regardless of its
+        address shape → emit it.
         """
         if self._confirm_left <= 0:
             return
@@ -236,29 +242,31 @@ class LaunchpadCurveListener:
             if self._confirm_left <= 0:
                 return
             low = cand.lower()
+            key = manager.lower() + ":" + low
             if (low in matched or low in skip or low in self._emitted
-                    or low in self._checked or int(low, 16) == 0):
+                    or key in self._checked or int(low, 16) == 0):
                 continue
-            self._checked.add(low)
+            self._checked.add(key)
             self._confirm_left -= 1
-            if await self._is_flap_token(manager, low):
+            if await self._is_launchpad_token(manager, low, selector):
                 emit(low)
 
-    async def _is_flap_token(self, manager: str, candidate: str) -> bool:
-        """True if Portal.getTokenV2(candidate) returns a valid (non-Invalid) status."""
+    async def _is_launchpad_token(self, manager: str, candidate: str,
+                                  selector: str) -> bool:
+        """True if manager.<confirm_fn>(candidate) returns a valid (non-zero) word."""
         arg = candidate.lower().replace("0x", "").rjust(64, "0")
         res = await self._rpc(
-            "eth_call", [{"to": manager, "data": "0x" + _GET_TOKEN_V2 + arg}, "latest"])
+            "eth_call", [{"to": manager, "data": "0x" + selector + arg}, "latest"])
         if not res or res == "0x":
             return False
         body = res[2:] if res.startswith("0x") else res
         if len(body) < 64:
             return False
         try:
-            status = int(body[:64], 16)   # TokenStateV2.status; 0 == Invalid
+            first = int(body[:64], 16)   # e.g. flap TokenStateV2.status; 0 == Invalid
         except ValueError:
             return False
-        return status != 0
+        return first != 0
 
     def _discover(self, name: str, entry: dict) -> None:
         """Log a never-before-seen event shape so we can pin the real ABI."""

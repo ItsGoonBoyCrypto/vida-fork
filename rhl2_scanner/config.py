@@ -147,9 +147,23 @@ class ChainConfig:
     #   boost         — discovery-score bump for tokens from this launchpad
     # Address left blank by default: set RHL2_FLAP_MANAGER on the host (grab it
     # from the flap docs "Deployed Contracts" page) to light it up.
+    #   confirm_fn    — a manager read fn (e.g. "getTokenV2(address)") that returns
+    #                   a non-zero first word for one of ITS tokens; lets the
+    #                   listener confirm non-vanity candidates without a topic/suffix
+    # flap is fully wired (confirm_fn set). RobinFun/Bags are here so they can be
+    # lit up with just a host Variable (RHL2_ROBINFUN_MANAGER / RHL2_BAGS_MANAGER)
+    # once you've verified the address on Blockscout; they run in discovery mode
+    # (log event shapes) until a create_topic/confirm_fn is pinned. Graduated
+    # tokens from ALL launchpads are already caught via DexScreener regardless —
+    # these entries add the pre-graduation edge + origin labeling.
     launchpads: list = field(default_factory=lambda: [
         {"name": "flap", "manager": "", "kind": "curve",
-         "create_topic": "", "graduate_topic": "", "boost": 15},
+         "create_topic": "", "graduate_topic": "", "boost": 15,
+         "confirm_fn": "getTokenV2(address)"},
+        {"name": "robinfun", "manager": "", "kind": "curve",
+         "create_topic": "", "graduate_topic": "", "boost": 12, "confirm_fn": ""},
+        {"name": "bags", "manager": "", "kind": "curve",
+         "create_topic": "", "graduate_topic": "", "boost": 12, "confirm_fn": ""},
     ])
 
     # --- Third-party safety API (RugCheck-equivalent for EVM) ---
@@ -534,20 +548,25 @@ class Config:
             self.chain.dex_factory_kind = v
         if v := env.get("RHL2_DEX_ROUTER_KIND"):
             self.chain.dex_router_kind = v
-        # flap.sh bonding-curve launchpad. RHL2_FLAP_MANAGER is the only one you
-        # need to set to enable early (pre-graduation) flap discovery; the two
-        # topic overrides are for locking in the event signatures once confirmed.
-        flap = self._launchpad("flap")
-        if flap is not None:
-            if v := env.get("RHL2_FLAP_MANAGER"):
+        # Bonding-curve launchpads (flap, robinfun, bags, …). Enable each with a
+        # host Variable RHL2_<NAME>_MANAGER (e.g. RHL2_FLAP_MANAGER,
+        # RHL2_ROBINFUN_MANAGER); the _CREATE_TOPIC / _GRADUATE_TOPIC overrides
+        # lock in the event signatures once confirmed from discovery logs.
+        for lp in (self.chain.launchpads or []):
+            nm = str(lp.get("name", "")).strip().upper()
+            if not nm:
+                continue
+            if v := env.get(f"RHL2_{nm}_MANAGER"):
                 if _looks_like_address(v):
-                    flap["manager"] = v.strip()
+                    lp["manager"] = v.strip()
                 else:
-                    _log.warning("RHL2_FLAP_MANAGER=%r is not a 0x address — ignoring", v)
-            if v := env.get("RHL2_FLAP_CREATE_TOPIC"):
-                flap["create_topic"] = v.strip()
-            if v := env.get("RHL2_FLAP_GRADUATE_TOPIC"):
-                flap["graduate_topic"] = v.strip()
+                    _log.warning("RHL2_%s_MANAGER=%r is not a 0x address — ignoring", nm, v)
+            if v := env.get(f"RHL2_{nm}_CREATE_TOPIC"):
+                lp["create_topic"] = v.strip()
+            if v := env.get(f"RHL2_{nm}_GRADUATE_TOPIC"):
+                lp["graduate_topic"] = v.strip()
+            if v := env.get(f"RHL2_{nm}_CONFIRM_FN"):
+                lp["confirm_fn"] = v.strip()
         # Whale wallets to watch — comma-separated 0x addresses (easy Railway var).
         if v := env.get("RHL2_WATCH_WALLETS"):
             self.wallet_watch.wallets = [w.strip().lower() for w in v.split(",") if w.strip()]

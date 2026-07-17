@@ -66,6 +66,28 @@ chain:
         - "0x88882688a067FE97E11C2185b996286e53132222"
         - "0x7777C8743C88B3aff3cf262135beF2c8b2e83333"
 
+    # --- More RH launchpads (added after Noxa shut down) ---------------------
+    # Graduated tokens from these are ALREADY caught via DexScreener; adding them
+    # here gets the PRE-graduation edge + origin labeling. Each runs in DISCOVERY
+    # mode (logs event shapes → grep host logs for "curve discovery [name]") until
+    # we pin its create_topic or a confirm_fn. VERIFY each address on
+    # robinhoodchain.blockscout.com before trusting it — the addresses below are
+    # from public research, not on-chain-confirmed by the bot.
+    - name: robinfun
+      manager: ""            # RHL2_ROBINFUN_MANAGER — research: 0xD952A74C85a2221a7DaB185c62cfD7EBa8C94AFC (RobinFunFactory, curve → 100%-burned LP ~$44k)
+      kind: curve
+      create_topic: ""       # env RHL2_ROBINFUN_CREATE_TOPIC (blank => discovery)
+      boost: 12
+      # confirm_fn: ""       # env RHL2_ROBINFUN_CONFIRM_FN once its read fn is known
+    - name: bags
+      manager: ""            # RHL2_BAGS_MANAGER — bags.fm curve → Uniswap v4 locked LP (docs.bags.fm/robinhood)
+      kind: curve
+      create_topic: ""       # env RHL2_BAGS_CREATE_TOPIC (blank => discovery)
+      boost: 12
+    # Note: MetaLaunch (0x49A3D384cd90A58815df31C1852dB4095B90c0De) is pool-from-
+    # day-one (no bonding curve), so DexScreener catches its tokens at launch —
+    # no curve wiring needed.
+
   # --- flap curve pricing (pre-graduation) ---
   # flap tokens trade on a bonding curve BEFORE they hit a DEX, so DexScreener
   # can't price them yet. We read the curve state directly from the Portal

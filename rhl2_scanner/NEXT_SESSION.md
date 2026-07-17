@@ -60,6 +60,25 @@ token — price/supply/reserve all internally consistent):
 `/group`/`/ungroup`/`/groups` · `/wallet` `/deployer` `/flapstate` `/curvepattern`
 `/curveprobe` `/calibrate`
 
+## More launchpads (Noxa shut down 2026-07)
+
+Noxa (the $12M launchpad, launched CASHCAT) closed. Others are live — and their
+**graduated tokens are already caught via DexScreener**, so no coverage was lost
+for those. Added as curve-launchpad entries (pre-grad edge + labeling), enable
+with a host Variable once verified on Blockscout:
+
+- **RobinFun** — `RHL2_ROBINFUN_MANAGER` (research: `0xD952A74C85a2221a7DaB185c62cfD7EBa8C94AFC`,
+  curve → 100%-burned LP ~$44k). Discovery mode until create_topic/confirm_fn pinned.
+- **Bags** (bags.fm) — `RHL2_BAGS_MANAGER` (curve → Uniswap v4 locked LP; has an API
+  at docs.bags.fm/robinhood we could wire like flap's getTokenV2).
+- **MetaLaunch** `0x49A3D384cd90A58815df31C1852dB4095B90c0De` — pool-from-day-one,
+  no curve, already caught by DexScreener (no wiring needed).
+- Others seen: ArrowPad, RH6900, Robinfun, RobinPad (not live yet), hood.fun.
+
+The listener now confirms non-suffix candidates via a per-launchpad `confirm_fn`
+(flap=getTokenV2). To finish RobinFun/Bags pre-grad: set their manager env → read
+`curve discovery [robinfun]` host logs → pin create_topic or confirm_fn.
+
 ## Ongoing (user)
 
 - Keep feeding `/calibrate 0xWinner …` — turns misses into exact threshold tunes.

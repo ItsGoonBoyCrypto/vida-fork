@@ -48,6 +48,29 @@ class TestConfigWiring(unittest.TestCase):
             del os.environ["RHL2_FLAP_CREATE_TOPIC"]
 
 
+    def test_generic_env_enables_new_launchpad(self):
+        import os
+        os.environ["RHL2_ROBINFUN_MANAGER"] = MANAGER
+        os.environ["RHL2_ROBINFUN_CONFIRM_FN"] = "getToken(address)"
+        try:
+            cfg = Config.load(None)
+            rf = cfg._launchpad("robinfun")
+            self.assertIsNotNone(rf)
+            self.assertEqual(rf["manager"], MANAGER)
+            self.assertEqual(rf["confirm_fn"], "getToken(address)")
+            self.assertIn(MANAGER.lower(), cfg.known_launchpad_addresses())
+        finally:
+            del os.environ["RHL2_ROBINFUN_MANAGER"]
+            del os.environ["RHL2_ROBINFUN_CONFIRM_FN"]
+
+    def test_new_launchpads_inert_without_env(self):
+        cfg = Config()
+        # robinfun/bags present but manager-less → not configured, listener ignores
+        names = {lp["name"] for lp in cfg.chain.launchpads}
+        self.assertTrue({"flap", "robinfun", "bags"} <= names)
+        self.assertEqual(cfg.configured_launchpads(), [])
+
+
 class TestDecode(unittest.TestCase):
     def test_extract_token_topic1(self):
         entry = {"topics": ["0xcreate", _pad(TOKEN), _pad(DEPLOYER)], "data": "0x"}
