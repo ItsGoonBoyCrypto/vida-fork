@@ -79,16 +79,18 @@ The listener confirms non-suffix candidates via a per-launchpad `confirm_fn`
 (flap=getTokenV2). Research nailed the mechanisms (exact ABIs need Blockscout,
 which the build-env proxy blocks — the Railway runtime reaches it fine):
 
-- **Bags**: state read is `BagsLens.getTokenState(token)` → (curve, feeShare,
-  poolId, migrated, …). ENABLE = `RHL2_BAGS_MANAGER=<BagsLens addr>` +
-  `RHL2_BAGS_CONFIRM_FN=getTokenState(address)`. Only missing: the Lens address.
+- **Bags**: ✅ FULLY WIRED (sources/bags.py). Registry discovery (BagsFactory
+  allTokensLength+getTokens) + getTokenState pricing. ENABLE = set
+  `RHL2_BAGS_MANAGER=<BagsLens>` + `RHL2_BAGS_FACTORY=<BagsFactory>`. Validate a
+  live token with `/bagsstate 0x…`. Only the two addresses are missing.
 - **RobinFun**: factory `0xD952A74C85a2221a7DaB185c62cfD7EBa8C94AFC` (verified),
-  creation event + `Migrated`. ENABLE = `RHL2_ROBINFUN_MANAGER=<factory>` → read
-  `curve discovery [robinfun]` logs → pin `RHL2_ROBINFUN_CREATE_TOPIC` + token_arg.
-
-**2-min Blockscout lookup to finish (user has RH access, build env doesn't):**
-(1) the BagsLens address on RH; (2) RobinFun's creation-event topic0 + which
-topic/data slot holds the new token. Paste both → wired instantly.
+  creation event + `Migrated`. Example token 0x56a98db16cf501b686c14ba00a5dec02e87083fa,
+  create tx 0xd06b823a8a0daa3ea493409927c633c2152ad35ff08e1c02f194c402057d6973.
+  Build env can't decode it (Blockscout 403). TWO paths to finish:
+  (a) if RobinFun has a lens/registry like Bags (check factory Read-Contract tab
+  for allTokensLength/getTokens/getTokenState) → reuse the Bags machinery;
+  (b) else set `RHL2_ROBINFUN_MANAGER=<factory>` → read `curve discovery
+  [robinfun]` host logs → pin `RHL2_ROBINFUN_CREATE_TOPIC` + token_arg.
 
 ## Ongoing (user)
 
