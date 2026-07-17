@@ -6,29 +6,28 @@ _Pinned to pick up next session. Branch: `claude/rh-l2-memecoin-scanner-7sj2qa`.
 
 flap tokens pump on the **bonding curve** and only hit DexScreener *after* they
 graduate — so the scanner currently can't price/score them pre-graduation
-(exactly the phase we want). To fix, we need flap's **on-chain price getter**.
+(exactly the phase we want). To fix, we read flap's **on-chain curve state**.
 
-Tooling is built and working: **`/curveprobe 0xToken`** probes the flap Portal
-(`0x26605f322f7fF986f381bB9A6e3f5DAb0bEaEb09`) for common price/reserve/quote
-functions; **`/deployer 0xToken`** confirms the Portal created it (via Blockscout).
+**SOLVED how (flap dev docs, `docs.flap.sh/dev`):** the flap **Portal**
+(`0x26605f322f7fF986f381bB9A6e3f5DAb0bEaEb09`) exposes
+**`getTokenV2(address)`** → one `eth_call` returning the whole `TokenStateV2`
+tuple: `(status, reserve, circulatingSupply, price, tokenVersion, r,
+dexSupplyThresh)`. status enum: 0 Invalid · 1 Tradable · 2 InDuel · 3 Killed ·
+4 DEX(graduated). progress = circulatingSupply / dexSupplyThresh.
 
-**Blocked on:** a VALID flap token CA. The last CA tried
-(`0xda4109d84a022b36b88273963f506ce02ef942ae`) is **not a contract** (both
-tools confirmed) — a wallet or mistyped address.
+Built: **`/flapstate 0xToken`** → single call, decodes that tuple, shows status,
+graduation %, price (ETH/token), reserve, est. mcap. Survives the rate limit
+(one call, not a 35-getter sweep). `scanner.flap_state()` returns it as a dict
+ready to feed scoring. `/curveprobe` stays as a raw-getter fallback.
 
-**NEXT STEPS (tomorrow):**
-1. Grab a real flap token CA from `flap.sh/robinhood/board` — one **currently
-   bonding** (progress bar, not graduated). Verify on `robinhoodchain.blockscout.com`
-   it shows a "Token" tab.
-2. `/deployer 0x<token>` → expect `created by: 0x26605f…` (the Portal).
-3. `/curveprobe 0x<token>` → paste the getter(s) that return data.
-4. Claude pins the price function → wires **live curve pricing** → flap tokens
-   get scored/alerted while still bonding (earliest entry on the chain).
-5. Also then: switch flap-token detection from vanity-suffix (8888/7777) to
-   "created by the Portal", since not all flap tokens use vanity addresses.
-
-If `/curveprobe` returns "succeeded but empty", flap uses custom function names
-— grab the read function from the flap **bonding-curve dev docs**.
+**NEXT STEPS:**
+1. `/flapstate 0x<bonding token>` on a live curve token → confirm the ETH price
+   / mcap match what flap.sh's UI shows (validates the 18-dec assumption).
+2. If they match: wire `flap_state()` into `_enrich` — when a token has no
+   DexScreener pair yet AND is a flap Portal token, populate price/mcap/progress
+   from getTokenV2 so scoring runs pre-graduation. Add ETH/USD conversion.
+3. Switch flap-token detection from vanity-suffix (8888/7777) to "getTokenV2
+   returns status != Invalid" (robust — not all flap tokens use vanity addrs).
 
 ## ✅ Live & working (all on Railway, persistent Volume at /app/data)
 
@@ -48,7 +47,8 @@ If `/curveprobe` returns "succeeded but empty", flap uses custom function names
 
 `/diag` `/stats [h]` `/perf` `/inspect` · `/zero`/`/unzero`/`/muted` ·
 `/block`/`/unblock`/`/blocked` · `/smart`/`/unsmart`/`/smartlist` ·
-`/group`/`/ungroup`/`/groups` · `/wallet` `/deployer` `/curveprobe` `/calibrate`
+`/group`/`/ungroup`/`/groups` · `/wallet` `/deployer` `/flapstate` `/curveprobe`
+`/calibrate`
 
 ## Ongoing (user)
 
@@ -56,4 +56,4 @@ If `/curveprobe` returns "succeeded but empty", flap uses custom function names
   (Already fixed the "contract not verified" gate this way.)
 - Flip `RHL2_SMART_AUTOSEED=1` and `RHL2_WINNER_HARVEST=1` when ready.
 
-_173 tests passing. Last commit: gentle/trustworthy `/curveprobe`._
+_177 tests passing. Last commit: `/flapstate` — Portal getTokenV2 curve pricing._

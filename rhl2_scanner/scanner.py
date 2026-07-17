@@ -626,6 +626,107 @@ class Scanner:
                          "the read function from the flap bonding-curve dev docs.")
         return "\n".join(lines)
 
+    # flap Portal read function (per flap dev docs): getTokenV2(address) returns the
+    # whole bonding-curve state in ONE call — status, reserve, circulating supply,
+    # price, token version, curve r, and the DEX-graduation supply threshold.
+    _FLAP_STATUS = {0: "Invalid", 1: "Tradable", 2: "InDuel", 3: "Killed", 4: "DEX/graduated"}
+
+    async def flap_state(self, token: str, delay: float = 1.2) -> dict:
+        """Read a flap token's live bonding-curve state via Portal.getTokenV2(token).
+
+        A single ``eth_call`` to the flap Portal — survives the rate-limited public
+        RPC where the getter-sweep can't — decoding the 7-field ``TokenStateV2``
+        tuple: (status, reserve, circulatingSupply, price, tokenVersion, r,
+        dexSupplyThresh). Returns a dict; ``ok`` is False with ``error`` on failure.
+        """
+        from .keccak import keccak256
+        import asyncio
+        assert self._session is not None
+        lp = self.cfg._launchpad("flap") or {}
+        portal = str(lp.get("manager") or "").strip()
+        if not portal:
+            return {"ok": False, "error": "no flap Portal configured (set RHL2_FLAP_MANAGER)"}
+        sel = keccak256(b"getTokenV2(address)").hex()[:8]
+        arg = token.lower().replace("0x", "").rjust(64, "0")
+        payload = {"jsonrpc": "2.0", "id": 1, "method": "eth_call",
+                   "params": [{"to": portal, "data": "0x" + sel + arg}, "latest"]}
+        result, err = None, None
+        for attempt in range(3):
+            try:
+                async with self._session.post(self.cfg.chain.rpc_url, json=payload) as r:
+                    if r.status in (429, 503, 504):
+                        err = "rate-limited"
+                        if delay:
+                            await asyncio.sleep(1.0 + attempt)
+                        continue
+                    if r.status != 200:
+                        return {"ok": False, "error": f"HTTP {r.status}", "portal": portal}
+                    d = await r.json()
+                    if isinstance(d, dict) and d.get("error"):
+                        return {"ok": False, "error": str(d["error"]), "portal": portal}
+                    result = d.get("result")
+                    err = None
+                    break
+            except Exception as exc:  # noqa: BLE001
+                err = str(exc)
+                if attempt < 2 and delay:
+                    await asyncio.sleep(1.0 + attempt)
+        if not result or result == "0x":
+            return {"ok": False, "error": err or "empty result", "portal": portal}
+        body = result[2:] if result.startswith("0x") else result
+        words = [body[i:i + 64] for i in range(0, len(body), 64)]
+        if len(words) < 7:
+            return {"ok": False, "error": f"short return ({len(words)} words)",
+                    "portal": portal, "raw": result[:200]}
+        v = [int(w, 16) for w in words[:7]]
+        status, reserve, circ, price, version, r_, thresh = v
+        progress = (circ / thresh * 100.0) if thresh else 0.0
+        return {"ok": True, "portal": portal, "status": status,
+                "status_label": self._FLAP_STATUS.get(status, f"?{status}"),
+                "reserve": reserve, "circulating_supply": circ, "price": price,
+                "token_version": version, "r": r_, "dex_supply_thresh": thresh,
+                "progress_pct": progress, "graduated": status == 4,
+                "tradable": status == 1}
+
+    async def flapstate(self, token: str, delay: float = 1.2) -> str:
+        """Human-readable flap curve state for the /flapstate command."""
+        st = await self.flap_state(token, delay=delay)
+        lines = [f"=== FLAP STATE {token} ===", f"Portal: {st.get('portal', '?')}"]
+        if not st.get("ok"):
+            err = st.get("error", "unknown")
+            if err == "rate-limited":
+                lines.append("⚠️ rate-limited — re-run in a few seconds (single call, "
+                             "usually gets through).")
+            else:
+                lines.append(f"❌ {err}")
+                if st.get("raw"):
+                    lines.append(f"raw: {st['raw']}")
+                lines.append("If status is Invalid/empty, this token isn't a flap "
+                             "Portal token (or already graduated to DEX).")
+            return "\n".join(lines)
+        e18 = 10 ** 18
+        price_eth = st["price"] / e18
+        # mcap ≈ price(ETH/token) × circulating supply(tokens); both 18-dec assumed.
+        mcap_eth = st["price"] * st["circulating_supply"] / (e18 * e18)
+        lines += [
+            f"status: {st['status_label']}",
+            f"graduation progress: {st['progress_pct']:.1f}%  "
+            f"({st['circulating_supply'] / e18:,.0f} / {st['dex_supply_thresh'] / e18:,.0f} supply)",
+            f"price: {price_eth:.10f} ETH/token  (raw {st['price']})",
+            f"reserve: {st['reserve'] / e18:.6f} ETH",
+            f"est. mcap: {mcap_eth:.4f} ETH   ← ×(ETH/USD) for USD mcap",
+            f"curve r: {st['r']}   token version: {st['token_version']}",
+        ]
+        if st["graduated"]:
+            lines.append("→ already on DEX — DexScreener has the live pair; use that.")
+        elif st["tradable"]:
+            lines.append("→ live on the curve (pre-graduation) — this is the pricing we "
+                         "wire into scoring.")
+        lines.append("")
+        lines.append("If these ETH figures match flap.sh's UI, the 18-dec assumption is "
+                     "right and I'll pin USD mcap/scoring straight in.")
+        return "\n".join(lines)
+
     async def _calibrate_one(self, ca: str) -> dict:
         """Enrich + score one known winner; capture metrics + what blocked it."""
         assert self._session is not None
@@ -820,8 +921,10 @@ class Scanner:
             "<b>Research &amp; tuning</b>",
             "<code>/wallet 0xWallet</code> — what tokens a wallet recently bought",
             "<code>/deployer 0xToken</code> — who created a token (finds a launchpad's manager)",
-            "<code>/curveprobe 0xToken [fn]</code> — probe a flap token's on-chain price "
-            "(add a fn name, e.g. <code>reserves</code>, for a single rate-limit-proof call)",
+            "<code>/flapstate 0xToken</code> — live flap curve price + graduation progress "
+            "(one call, Portal getTokenV2)",
+            "<code>/curveprobe 0xToken [fn]</code> — raw getter probe (fallback; add a fn name "
+            "for a single rate-limit-proof call)",
             "<code>/calibrate 0xCA1 0xCA2 …</code> — tune thresholds against your known winners",
             "",
             "<i>Alerts you'll get: 🚨 Gem / 👀 Watch / 🌱 Early · 🔼 Upgrades · "
@@ -989,6 +1092,16 @@ class Scanner:
                 await self._send_html("<pre>" + _esc(await self.curveprobe(arg, func=func)) + "</pre>")
             except Exception as exc:
                 await self._send_html("curveprobe failed: " + __import__("html").escape(str(exc)))
+        elif cmd in ("flapstate", "flap", "curve"):
+            if not valid_ca:
+                await self._send_html("Usage: <code>/flapstate 0x&lt;flap token&gt;</code> "
+                                      "— live bonding-curve price + graduation progress")
+                return
+            try:
+                from html import escape as _esc
+                await self._send_html("<pre>" + _esc(await self.flapstate(arg)) + "</pre>")
+            except Exception as exc:
+                await self._send_html("flapstate failed: " + __import__("html").escape(str(exc)))
         elif cmd in ("deployer", "creator"):
             if not valid_ca:
                 await self._send_html("Usage: <code>/deployer 0x&lt;token&gt;</code> "
