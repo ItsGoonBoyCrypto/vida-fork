@@ -15,19 +15,27 @@ tuple: `(status, reserve, circulatingSupply, price, tokenVersion, r,
 dexSupplyThresh)`. status enum: 0 Invalid · 1 Tradable · 2 InDuel · 3 Killed ·
 4 DEX(graduated). progress = circulatingSupply / dexSupplyThresh.
 
-Built: **`/flapstate 0xToken`** → single call, decodes that tuple, shows status,
-graduation %, price (ETH/token), reserve, est. mcap. Survives the rate limit
-(one call, not a 35-getter sweep). `scanner.flap_state()` returns it as a dict
-ready to feed scoring. `/curveprobe` stays as a raw-getter fallback.
+Built + **WIRED INTO SCORING** (validated live 2026-07-17 on a real 79.4%-bonded
+token — price/supply/reserve all internally consistent):
 
-**NEXT STEPS:**
-1. `/flapstate 0x<bonding token>` on a live curve token → confirm the ETH price
-   / mcap match what flap.sh's UI shows (validates the 18-dec assumption).
-2. If they match: wire `flap_state()` into `_enrich` — when a token has no
-   DexScreener pair yet AND is a flap Portal token, populate price/mcap/progress
-   from getTokenV2 so scoring runs pre-graduation. Add ETH/USD conversion.
-3. Switch flap-token detection from vanity-suffix (8888/7777) to "getTokenV2
-   returns status != Invalid" (robust — not all flap tokens use vanity addrs).
+- **`/flapstate 0xToken`** — one call, decodes the tuple: status, graduation %,
+  price (ETH/token), reserve, est. mcap. Survives the rate limit.
+- **`_enrich_flap_curve()`** runs inside `_enrich`: when a token has no
+  DexScreener market yet, it reads getTokenV2 and (if Tradable) fills
+  `market_cap_usd` / `price_usd` / `liquidity_usd` / `curve_progress_pct` so the
+  scorer ranks the token **pre-graduation**. Alerts already show
+  `Launchpad: flap | Curve: NN% (pre-grad)` (formatter.py:89).
+- **ETH/USD** is learned free from any graduated RH pair (priceUsd/priceNative,
+  sanity-banded); bootstrap with env `RHL2_ETH_USD` for day-one. `/curveprobe`
+  stays as a raw-getter fallback.
+
+**NEXT STEPS (optional polish):**
+1. Eyeball `/flapstate` ETH mcap vs flap.sh UI once more to be 100% on the
+   18-dec scale (math already self-consistent; low risk).
+2. Consider a scoring **boost for tokens at ~60-95% graduation** (about to
+   graduate = prime entry) — small tweak in scoring.py.
+3. Switch flap detection from vanity-suffix (8888/7777) to "getTokenV2 status
+   != Invalid" so non-vanity flap tokens are caught too.
 
 ## ✅ Live & working (all on Railway, persistent Volume at /app/data)
 
@@ -56,4 +64,4 @@ ready to feed scoring. `/curveprobe` stays as a raw-getter fallback.
   (Already fixed the "contract not verified" gate this way.)
 - Flip `RHL2_SMART_AUTOSEED=1` and `RHL2_WINNER_HARVEST=1` when ready.
 
-_177 tests passing. Last commit: `/flapstate` — Portal getTokenV2 curve pricing._
+_182 tests passing. Last commit: flap curve pricing wired into scoring (getTokenV2 + learned ETH/USD)._

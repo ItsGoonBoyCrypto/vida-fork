@@ -168,6 +168,7 @@ class DexScreenerClient:
             symbol=base.get("symbol", ""),
             name=base.get("name", ""),
             price_usd=_f(p.get("priceUsd")),
+            price_native=_f(p.get("priceNative")),
             market_cap_usd=_f(p.get("marketCap")),
             fdv_usd=_f(p.get("fdv")),
             liquidity_usd=_f(liq.get("usd")),

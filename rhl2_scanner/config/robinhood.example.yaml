@@ -60,6 +60,15 @@ chain:
         - "0x88882688a067FE97E11C2185b996286e53132222"
         - "0x7777C8743C88B3aff3cf262135beF2c8b2e83333"
 
+  # --- flap curve pricing (pre-graduation) ---
+  # flap tokens trade on a bonding curve BEFORE they hit a DEX, so DexScreener
+  # can't price them yet. We read the curve state directly from the Portal
+  # (getTokenV2) and convert its ETH figures to USD using a live ETH/USD rate,
+  # which the scanner LEARNS for free from any graduated RH pair it sees
+  # (priceUsd / priceNative). Until it has learned one, set a bootstrap hint so
+  # day-one flap tokens still get USD-scored:
+  #     env RHL2_ETH_USD = 3500     (optional — the learned live value always wins)
+
   # --- On-chain honeypot sell-sim ---
   # Uniswap V3 SwapRouter02 on Robinhood Chain (exactInputSingle sell-sim).
   dex_router_address: "0xCaf681a66D020601342297493863E78C959E5cb2"

@@ -126,6 +126,9 @@ class Scanner:
         self._last_harvest_ts: Optional[float] = None
         self._wallet_watcher = None  # bound to the shared session in run_once
         self._cmd_offset = None      # Telegram getUpdates offset (loaded from db)
+        # Live ETH/USD, learned free from any graduated RH pair (priceUsd/priceNative).
+        # Lets us convert flap's on-curve ETH figures into the USD the scorer uses.
+        self._eth_usd: Optional[float] = None
         # Merge any persisted smart-money wallets (from prior /smart or autoseed)
         # into the config set so they take effect this run.
         self._merge_persisted_smart_wallets()
@@ -726,6 +729,59 @@ class Scanner:
         lines.append("If these ETH figures match flap.sh's UI, the 18-dec assumption is "
                      "right and I'll pin USD mcap/scoring straight in.")
         return "\n".join(lines)
+
+    def _note_eth_usd(self, snap: TokenSnapshot) -> None:
+        """Learn live ETH/USD, free, from a graduated RH pair.
+
+        On Robinhood Chain every DexScreener pair is quoted in ETH, so
+        priceUsd / priceNative == ETH/USD. We cache the latest sane value and
+        use it to price flap tokens still on the curve (which have no pair yet).
+        """
+        pu, pn = snap.price_usd, snap.price_native
+        if pu and pn and pn > 0:
+            rate = pu / pn
+            if 100.0 <= rate <= 100000.0:      # sanity band — reject garbage quotes
+                self._eth_usd = rate
+
+    def _eth_usd_rate(self) -> Optional[float]:
+        """Current ETH/USD: the learned live value, else the RHL2_ETH_USD hint."""
+        if self._eth_usd:
+            return self._eth_usd
+        import os
+        try:
+            hint = float(os.environ.get("RHL2_ETH_USD", "") or 0)
+        except ValueError:
+            hint = 0.0
+        return hint or None
+
+    async def _enrich_flap_curve(self, snap: TokenSnapshot) -> None:
+        """Price a flap token still on the bonding curve, via Portal.getTokenV2.
+
+        Only runs when the token has no DexScreener market yet (pre-graduation).
+        One eth_call gives status/reserve/supply/price; combined with live ETH/USD
+        it fills market_cap_usd / price_usd / liquidity_usd so the scorer can rank
+        the token BEFORE it graduates — the earliest possible entry on the chain.
+        """
+        if snap.market_cap_usd:            # already priced by DexScreener (listed/graduated)
+            return
+        lp = self.cfg._launchpad("flap") or {}
+        if not lp.get("manager"):          # no flap Portal configured → nothing to read
+            return
+        st = await self.flap_state(snap.token_address)
+        if not st.get("ok") or not st.get("tradable"):
+            return                          # Invalid (not a flap token) or already on DEX
+        snap.launchpad = snap.launchpad or "flap"
+        snap.curve_progress_pct = st["progress_pct"]
+        e18 = 10 ** 18
+        rate = self._eth_usd_rate()
+        if not rate:                        # no ETH/USD yet → progress only, no USD scoring
+            return
+        price_usd = (st["price"] / e18) * rate
+        circ = st["circulating_supply"] / e18
+        snap.price_native = st["price"] / e18
+        snap.price_usd = price_usd
+        snap.market_cap_usd = price_usd * circ
+        snap.liquidity_usd = (st["reserve"] / e18) * rate
 
     async def _calibrate_one(self, ca: str) -> dict:
         """Enrich + score one known winner; capture metrics + what blocked it."""
@@ -1653,6 +1709,10 @@ class Scanner:
         configured simply leaves its facts unknown.
         """
         assert self._session is not None
+        # Learn live ETH/USD from this snap if it carries a native price (any
+        # graduated RH pair does) — powers flap curve pricing below.
+        self._note_eth_usd(snap)
+
         safety = CompositeSafetySource(self.cfg, session=self._session)
         chain = EvmChainClient(self.cfg, session=self._session)
         bundle = BundleAnalyzer(self.cfg, session=self._session)
@@ -1664,6 +1724,10 @@ class Scanner:
             except Exception as exc:
                 log.debug("enrichment source failed: %s", exc)
                 return None
+
+        # flap tokens still on the curve have no DexScreener market — price them
+        # from the Portal so the scorer can rank them pre-graduation.
+        await _safe(self._enrich_flap_curve(snap))
 
         # Composite safety (GoPlus + on-chain + honeypot sim) merged conservatively.
         # Bundle analysis also writes into snap.safety, so run it first, then

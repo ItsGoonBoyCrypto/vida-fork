@@ -70,6 +70,7 @@ class TokenSnapshot:
 
     # Market
     price_usd: Optional[float] = None
+    price_native: Optional[float] = None      # price in the chain's native token (ETH on RH)
     market_cap_usd: Optional[float] = None
     fdv_usd: Optional[float] = None
     liquidity_usd: Optional[float] = None
