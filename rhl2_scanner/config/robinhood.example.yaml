@@ -93,27 +93,26 @@ tiers:
     thresholds:
       max_age_minutes: 1440         # < 24h
       min_age_minutes: 0
-      min_liquidity_usd: 5000       # >= $5k (now a real gate)
-      thin_liquidity_usd: 5000      # hard-skip under $5k
-      min_market_cap_usd: 40000     # $40k floor (now a real gate)
-      max_market_cap_usd: 1000000   # $1M ceiling
+      # --- Sub-$100K early-gem tuning (open the gates for small fresh tokens) ---
+      min_liquidity_usd: 2000       # was 5000 — early gems have thin liquidity
+      thin_liquidity_usd: 2000      # hard-skip floor
+      min_market_cap_usd: 4000      # was 40000 — THE fix: 40k skipped every sub-40k gem
+      max_market_cap_usd: 150000    # was 1M — focus on sub-100k gems (50k headroom)
       max_top10_pct: 15             # top10 scoring reason threshold
-      skip_top10_pct: 60            # HARD skip if top10 above 60% (early tokens are concentrated)
+      skip_top10_pct: 75            # was 60 — brand-new tokens are naturally concentrated
       max_top1_pct: 0               # 0 = disabled (any value >0 gates top1)
-      min_holders: 100              # holder-score ramp target (NOT a gate)
+      min_holders: 30               # was 100 — holder-score ramp start (NOT a gate)
       max_bundle_pct: 6             # bundle scoring reason threshold
-      skip_bundle_pct: 15           # HARD skip if bundle above 15%
-      max_sniper_cluster_pct: 15    # HARD skip if sniper cluster above 15% (0 = off)
-      max_dev_holdings_pct: 10      # HARD skip if dev above 10%
+      skip_bundle_pct: 22           # was 15 — allow more early clustering
+      max_sniper_cluster_pct: 22    # was 15 — early buyers cluster naturally
+      max_dev_holdings_pct: 10      # KEPT — dev holding >10% is a real red flag
       max_tax_pct: 1                # HARD skip if KNOWN tax above 1% each
       min_lp_lock_seconds: 0        # 0 = any lock duration accepted
-      require_contract_verified: false  # RH Chain barely verifies contracts —
-                                        # requiring it would zero legit tokens.
-                                        # Verified still earns +15 in scoring.
-      ideal_mcap_low: 50000
-      ideal_mcap_high: 400000
-      ideal_holders: 300
-      min_volume_24h_usd: 10000
+      require_contract_verified: false  # RH Chain barely verifies contracts.
+      ideal_mcap_low: 15000
+      ideal_mcap_high: 100000
+      ideal_holders: 120            # was 300 — small gems reach full holder score sooner
+      min_volume_24h_usd: 2500      # was 10000 — don't over-penalise low-volume early
       min_buy_ratio_1h: 0.60
       strong_buy_ratio_1h: 0.70
       # Short-term velocity: last-5-min volume rate vs the trailing 1h rate.
@@ -137,6 +136,13 @@ runtime:
   dry_run: false
   log_level: "INFO"
   realert_cooldown_seconds: 21600
+  # Early-launch alerts (🌱): the main way fresh sub-$100K gems surface — they
+  # have thin data and can't reach the maturity score, so we alert on SAFE +
+  # fresh + a real pool instead. Widened to catch more small early gems.
+  early_launch_enabled: true
+  early_launch_max_age_minutes: 180     # was 60 — catch gems up to 3h old
+  early_launch_min_liquidity_usd: 1500  # was 3000 — smaller early pools count
+  early_launch_require_safety: true     # still require the safety gate to pass
   # Live alerts on RH Chain today: strict on all confirmable metrics (verified,
   # authorities revoked, LP burned, top10/holders/bundle/momentum) + router-free
   # honeypot check; tolerates unconfirmed tax until a V3 router/oracle is wired.
