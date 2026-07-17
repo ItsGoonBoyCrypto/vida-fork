@@ -103,11 +103,18 @@ Once enough tokens have aged ~48h, `backtest` produces a validated signature and
 
 **Implemented + tested (offline):**
 - data model, storage (SQLite point-in-time store), labeler, feature extraction
+  (incl. velocity/growth features: vol accel, buy-pressure trend, holder velocity,
+  liquidity growth)
+- **bootstrap prior signature** — screens + alerts from DAY ONE on proven
+  meme-pumper heuristics; the backtest replaces it once a data-derived signature
+  validates (and never overwrites it with an empty one)
 - backtest engine (rule-mining + linear model, time-split validate: precision/recall/lift)
 - screener (score live tokens vs signature, signature (de)serialisation)
-- DexScreener ingest mapping (schema-verified with fixtures)
-- collector loop, CLI, read-only API
-- **28 tests** incl. a full-loop integration (record → relabel → backtest → screen)
+- source-level discovery: pump.fun (Solana, pre-graduation) + DEX-factory logs
+  (EVM — RH out of the box; ETH/Base when an RPC is set); DexScreener fallback
+- alerting with tap-to-copy CA + Chart/𝕏/TG/Web links; autonomous 6h backtest loop
+- DexScreener ingest mapping (schema-verified with fixtures), CLI, read-only API
+- **29 tests** incl. a full-loop integration (record → relabel → backtest → screen)
 
 **Verified on deploy (network blocked from the build env):** live DexScreener
 HTTP, GoPlus (EVM) + RugCheck (Solana) enrichment calls.

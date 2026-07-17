@@ -12,8 +12,9 @@ from ..models import Chain, FeatureVector, Outcome, TokenSnapshot, TokenTimeSeri
 
 FEATURE_NAMES = [
     "entry_liquidity_usd", "entry_market_cap_usd", "liq_to_mcap",
-    "vol5m_to_vol1h", "buy_ratio_5m", "buy_ratio_1h", "price_change_5m",
-    "vol_to_mcap", "holder_count", "holder_growth", "top10_pct", "top1_pct",
+    "vol5m_to_vol1h", "buy_ratio_5m", "buy_ratio_1h", "buy_pressure_trend",
+    "price_change_5m", "vol_to_mcap", "holder_count", "holder_growth",
+    "holder_velocity", "liq_growth", "top10_pct", "top1_pct",
     "dev_holdings_pct", "bundle_pct", "sniper_pct", "smart_money_count",
     "has_socials", "launchpad_flag", "dex_boosted", "is_sellable",
     "authorities_ok", "lp_safe", "risk_score",
@@ -40,12 +41,20 @@ def _features_from(early: list, first: TokenSnapshot, last: TokenSnapshot) -> di
     if last.buys_1h is not None and last.sells_1h is not None:
         tot = last.buys_1h + last.sells_1h
         f["buy_ratio_1h"] = (last.buys_1h / tot) if tot else None
+    # buy-pressure trend: is 5m buying hotter than the 1h baseline? (accelerating)
+    if f.get("buy_ratio_5m") is not None and f.get("buy_ratio_1h") is not None:
+        f["buy_pressure_trend"] = f["buy_ratio_5m"] - f["buy_ratio_1h"]
     f["price_change_5m"] = last.price_change_5m
     f["vol_to_mcap"] = _ratio(last.volume_1h, last.market_cap_usd)
     f["holder_count"] = last.holder_count
-    # holder growth across the window
+    # holder growth across the window + velocity (holders per minute elapsed)
     if first.holder_count is not None and last.holder_count is not None:
         f["holder_growth"] = last.holder_count - first.holder_count
+        elapsed_min = max(1.0, (last.ts - first.ts) / 60.0)
+        f["holder_velocity"] = f["holder_growth"] / elapsed_min
+    # liquidity growth across the window (real pools deepen; fakes don't)
+    if first.liquidity_usd and last.liquidity_usd:
+        f["liq_growth"] = last.liquidity_usd / first.liquidity_usd
     f["top10_pct"] = last.top10_supply_pct
     f["top1_pct"] = last.top1_supply_pct
     f["dev_holdings_pct"] = last.dev_holdings_pct

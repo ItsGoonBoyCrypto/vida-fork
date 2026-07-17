@@ -38,9 +38,40 @@ class SolanaAdapter(ChainAdapter):
         return Chain.SOLANA
 
     async def discover(self) -> list[TokenSnapshot]:
-        # TODO: pump.fun (bonding-curve) + Raydium new-pool feeds → stubs with
-        # on_curve=True pre-graduation. Collector falls back to feed.new_pairs.
-        return []
+        """Newest pump.fun launches — the earliest Solana catch (pre-graduation).
+
+        pump.fun is the Solana analog of flap: tokens launch on a bonding curve
+        and only hit DexScreener after graduating to Raydium. Its public API lists
+        the freshest mints, so we catch them while still bonding.
+        """
+        if self._session is None:
+            return []
+        url = ("https://frontend-api.pump.fun/coins?offset=0&limit=50"
+               "&sort=created_timestamp&order=DESC&includeNsfw=false")
+        data = await self._get(url)
+        if not isinstance(data, list):
+            return []
+        import time
+        out = []
+        for c in data:
+            mint = c.get("mint")
+            if not mint:
+                continue
+            created = c.get("created_timestamp")
+            age = None
+            if isinstance(created, (int, float)):
+                age = max(0.0, (time.time() - created / 1000.0) / 60.0)
+            socials = {}
+            for k in ("twitter", "telegram", "website"):
+                if c.get(k):
+                    socials[k] = c[k]
+            out.append(TokenSnapshot(
+                chain=Chain.SOLANA, token_address=mint,
+                symbol=c.get("symbol") or "", name=c.get("name") or "",
+                market_cap_usd=_f(c.get("usd_market_cap")),
+                on_curve=not c.get("complete"),
+                age_minutes=age, socials=socials, launchpad="pumpfun"))
+        return out
 
     async def enrich_safety(self, snap: TokenSnapshot) -> None:
         if self._session is None or not snap.token_address:

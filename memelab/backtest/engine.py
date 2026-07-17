@@ -183,14 +183,19 @@ def run_backtest(store, win_multiple: float = 3.0, chains: list = None,
     vectors = [extract(t) for t in settled]
     vectors = [v for v in vectors if v.features]
     if len(vectors) < 10:
-        sig = Signature(chains=chains or [], win_multiple=win_multiple, created_ts=now,
-                        notes=f"only {len(vectors)} usable samples — keep collecting")
-        store.save_signature(signature_to_json(sig))
-        return sig
+        # Not enough to learn — DON'T overwrite the active signature (the
+        # bootstrap prior keeps working). Return a non-persisted status marker.
+        return Signature(chains=chains or [], win_multiple=win_multiple, created_ts=now,
+                         notes=f"only {len(vectors)} usable samples — keep collecting "
+                               "(prior retained)")
 
     cut = int(len(vectors) * train_frac)
     train, holdout = vectors[:cut], vectors[cut:]
     sig = derive(train, win_multiple=win_multiple, chains=chains)
+    if not sig.rules:
+        # Derived nothing separating — keep the prior rather than go silent.
+        sig.notes += " — no separating features yet (prior retained)"
+        return sig
     metrics = validate(sig, holdout)
     sig.precision = metrics.get("precision")
     sig.recall = metrics.get("recall")

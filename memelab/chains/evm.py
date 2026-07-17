@@ -37,18 +37,96 @@ def _pct(x) -> Optional[float]:
 
 
 class EvmAdapter(ChainAdapter):
+    # Standard DEX-factory creation-event topics (keccak of the signatures).
+    _PAIR_CREATED = "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9"
+    _POOL_CREATED = "0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118"
+
     def __init__(self, config, session=None):
         super().__init__(config)
         self._session = session
+        self._last_block = None
 
     @property
     def chain(self) -> Chain:
         return self.config.chain
 
     async def discover(self) -> list[TokenSnapshot]:
-        # Source-level discovery needs a per-chain RPC + factory addresses; only
-        # RH has them wired (rhl2_scanner). Collector falls back to feed.new_pairs.
-        return []
+        """New pools from the DEX factory via eth_getLogs — earliest EVM catch.
+
+        Works when the chain has rpc_url + dex_factory_address configured (RH does
+        out of the box; add an RPC for ETH/Base to enable). Otherwise returns []
+        and the collector falls back to the DexScreener discovery feed.
+        """
+        rpc = self.config.rpc_url
+        factory = self.config.dex_factory_address
+        if not (rpc and factory) or self._session is None:
+            return []
+        head = await self._block_number(rpc)
+        if head is None:
+            return []
+        if self._last_block is None:
+            self._last_block = head - 500          # small backfill on first poll
+        frm = self._last_block + 1
+        if frm > head:
+            return []
+        topic = (self._POOL_CREATED if self.config.dex_factory_kind == "univ3"
+                 else self._PAIR_CREATED)
+        logs = await self._get_logs(rpc, factory, frm, head, topic)
+        self._last_block = head
+        weth = (self.config.weth_address or "").lower()
+        out, seen = [], set()
+        for lg in logs:
+            token = self._token_from_log(lg, weth)
+            if token and token not in seen:
+                seen.add(token)
+                out.append(TokenSnapshot(chain=self.chain, token_address=token,
+                                         age_minutes=0.0))
+        return out
+
+    def _token_from_log(self, lg: dict, weth: str):
+        """The non-WETH token from a Pair/PoolCreated log (token0/token1 indexed)."""
+        topics = lg.get("topics") or []
+        if len(topics) < 3:
+            return None
+        t0 = "0x" + topics[1][-40:]
+        t1 = "0x" + topics[2][-40:]
+        if weth and t0.lower() == weth:
+            return t1.lower()
+        if weth and t1.lower() == weth:
+            return t0.lower()
+        return t0.lower()
+
+    async def _rpc(self, rpc, method, params):
+        payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        for attempt in range(4):
+            try:
+                async with self._session.post(rpc, json=payload) as r:
+                    if r.status in (429, 502, 503, 504):
+                        await asyncio.sleep(min(2.0, 0.4 * (2 ** attempt)))
+                        continue
+                    if r.status != 200:
+                        return None
+                    d = await r.json()
+                    return None if d.get("error") else d.get("result")
+            except Exception:  # noqa: BLE001
+                if attempt < 3:
+                    await asyncio.sleep(min(2.0, 0.4 * (2 ** attempt)))
+                    continue
+                return None
+        return None
+
+    async def _block_number(self, rpc):
+        res = await self._rpc(rpc, "eth_blockNumber", [])
+        try:
+            return int(res, 16) if res else None
+        except (ValueError, TypeError):
+            return None
+
+    async def _get_logs(self, rpc, factory, frm, to, topic):
+        res = await self._rpc(rpc, "eth_getLogs", [{
+            "fromBlock": hex(frm), "toBlock": hex(to),
+            "address": factory.lower(), "topics": [topic]}])
+        return res if isinstance(res, list) else []
 
     async def enrich_safety(self, snap: TokenSnapshot) -> None:
         gid = self.config.goplus_chain_id

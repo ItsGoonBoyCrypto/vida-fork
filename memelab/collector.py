@@ -56,6 +56,12 @@ class Collector:
         from .alerting import TelegramAlerter
         from .screener.engine import Screener
         self.alerter = alerter or TelegramAlerter()
+        # Seed the bootstrap prior so screening works from day one; the backtest
+        # loop replaces it once a data-derived signature validates.
+        if store.active_signature() is None:
+            from .bootstrap import default_signature
+            from .models import signature_to_json
+            store.save_signature(signature_to_json(default_signature(cfg.chains)))
         self.screener = Screener(store)
         self.screener.reload_signature()
         self._last_relabel = 0.0

@@ -31,10 +31,32 @@ def format_screen_html(scr: Screen, signature_precision: Optional[float] = None)
     ]
     if scr.reasons:
         lines.append("Why: " + ", ".join(escape(r) for r in scr.reasons[:6]))
+    links = []
     if s.pair_address:
-        lines.append(f'<a href="https://dexscreener.com/{s.chain.value}/{s.pair_address}">DexScreener</a>')
+        links.append(f'<a href="https://dexscreener.com/{s.chain.value}/{s.pair_address}">Chart</a>')
+    for label, url in _social_links(s.socials):
+        links.append(f'<a href="{escape(url)}">{label}</a>')
+    if links:
+        lines.append(" · ".join(links))
     lines.append("<i>Signal from the backtested winner signature. DYOR, size small.</i>")
     return "\n".join(lines)
+
+
+def _social_links(socials: dict):
+    """Extract X (Twitter) + Telegram + website links from DexScreener socials."""
+    out = []
+    if not socials:
+        return out
+    # socials is {type: url}; DexScreener uses 'twitter'/'telegram'/'website'
+    for key in ("twitter", "x"):
+        if socials.get(key):
+            out.append(("𝕏", socials[key]))
+            break
+    if socials.get("telegram"):
+        out.append(("TG", socials["telegram"]))
+    if socials.get("website"):
+        out.append(("Web", socials["website"]))
+    return out
 
 
 def _usd(x) -> str:
