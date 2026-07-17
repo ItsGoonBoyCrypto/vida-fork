@@ -56,6 +56,19 @@ CREATE TABLE IF NOT EXISTS screen_alerts (
     score         REAL,
     PRIMARY KEY (chain, token_address)  -- one alert per token
 );
+CREATE TABLE IF NOT EXISTS smart_wallets (
+    chain   TEXT NOT NULL,
+    wallet  TEXT NOT NULL,             -- lowercased; a curated/harvested sharp wallet
+    source  TEXT,                      -- "seed" | "winner:<token>"
+    ts      REAL NOT NULL,
+    PRIMARY KEY (chain, wallet)
+);
+CREATE TABLE IF NOT EXISTS harvested (
+    chain   TEXT NOT NULL,
+    token   TEXT NOT NULL,             -- winner tokens already harvested (dedup)
+    ts      REAL NOT NULL,
+    PRIMARY KEY (chain, token)
+);
 """
 
 
@@ -175,6 +188,12 @@ class Store:
         rows = self._conn.execute(q, args).fetchall()
         return [self.time_series(Chain(r["chain"]), r["token_address"]) for r in rows]
 
+    def winner_tokens(self) -> list:
+        """(Chain, token) for every token currently labeled WINNER."""
+        cur = self._conn.execute(
+            "SELECT chain, token_address FROM tokens WHERE outcome = 'winner'")
+        return [(Chain(r["chain"]), r["token_address"]) for r in cur.fetchall()]
+
     def set_outcome(self, chain: Chain, token_address: str, outcome: Outcome,
                     peak: float, trough: float) -> None:
         self._conn.execute(
@@ -207,6 +226,47 @@ class Store:
         self._conn.execute(
             "INSERT INTO screen_alerts (chain, token_address, ts, score) VALUES (?, ?, ?, ?)",
             (chain.value, token_address.lower(), time.time(), score))
+        self._conn.commit()
+        return True
+
+    # -- smart-money set ------------------------------------------------
+
+    def add_smart_wallet(self, chain: Chain, wallet: str, source: str = "seed") -> bool:
+        cur = self._conn.execute(
+            "SELECT 1 FROM smart_wallets WHERE chain = ? AND wallet = ?",
+            (chain.value, wallet.lower()))
+        existed = cur.fetchone() is not None
+        self._conn.execute(
+            "INSERT OR IGNORE INTO smart_wallets (chain, wallet, source, ts) VALUES (?, ?, ?, ?)",
+            (chain.value, wallet.lower(), source, time.time()))
+        self._conn.commit()
+        return not existed
+
+    def is_smart_wallet(self, chain: Chain, wallet: str) -> bool:
+        cur = self._conn.execute(
+            "SELECT 1 FROM smart_wallets WHERE chain = ? AND wallet = ?",
+            (chain.value, wallet.lower()))
+        return cur.fetchone() is not None
+
+    def smart_wallets(self, chain: Chain) -> set:
+        cur = self._conn.execute(
+            "SELECT wallet FROM smart_wallets WHERE chain = ?", (chain.value,))
+        return {r["wallet"] for r in cur.fetchall()}
+
+    def smart_wallet_count(self, chain: Optional[Chain] = None) -> int:
+        if chain:
+            return self._conn.execute(
+                "SELECT COUNT(*) FROM smart_wallets WHERE chain = ?", (chain.value,)).fetchone()[0]
+        return self._conn.execute("SELECT COUNT(*) FROM smart_wallets").fetchone()[0]
+
+    def mark_harvested(self, chain: Chain, token: str) -> bool:
+        """True if not yet harvested (and records it)."""
+        cur = self._conn.execute(
+            "SELECT 1 FROM harvested WHERE chain = ? AND token = ?", (chain.value, token.lower()))
+        if cur.fetchone() is not None:
+            return False
+        self._conn.execute("INSERT INTO harvested (chain, token, ts) VALUES (?, ?, ?)",
+                           (chain.value, token.lower(), time.time()))
         self._conn.commit()
         return True
 

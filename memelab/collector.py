@@ -48,11 +48,12 @@ class CollectorConfig:
 
 class Collector:
     def __init__(self, cfg: CollectorConfig, store: Store, adapters: dict, feed,
-                 alerter=None):
+                 alerter=None, smart_money=None):
         self.cfg = cfg
         self.store = store
         self.adapters = adapters        # {Chain: ChainAdapter}
         self.feed = feed                # DexScreenerFeed
+        self.smart_money = smart_money  # SmartMoney | None
         from .alerting import TelegramAlerter
         from .screener.engine import Screener
         self.alerter = alerter or TelegramAlerter()
@@ -103,12 +104,18 @@ class Collector:
             snap = await self.feed.market_for(chain, row["token_address"])
             if snap is None:
                 continue                       # not indexed yet (still on curve) — skip
-            # periodically refresh safety too (cheap fields already carried)
-            if adapter is not None and self._due(row, safety=True):
-                try:
-                    await adapter.enrich_safety(snap)
-                except Exception:
-                    log.debug("enrich %s failed", row["token_address"], exc_info=True)
+            # periodically refresh safety + smart-money (warm cadence, not every tick)
+            if self._due(row, safety=True):
+                if adapter is not None:
+                    try:
+                        await adapter.enrich_safety(snap)
+                    except Exception:
+                        log.debug("enrich %s failed", row["token_address"], exc_info=True)
+                if self.smart_money is not None:
+                    try:
+                        await self.smart_money.annotate(snap)
+                    except Exception:
+                        log.debug("smart-money %s failed", row["token_address"], exc_info=True)
             snap.ts = time.time()
             self.store.record_snapshot(snap)
             await self._maybe_alert(chain, row["token_address"])
@@ -168,3 +175,10 @@ class Collector:
             log.info("relabel: %s", counts)
         except Exception:
             log.exception("relabel failed")
+        # Harvest confirmed winners' early buyers into the smart-money set.
+        if self.smart_money is not None:
+            for chain, token in self.store.winner_tokens():
+                try:
+                    await self.smart_money.harvest_winner(chain, token)
+                except Exception:
+                    log.debug("harvest %s failed", token, exc_info=True)

@@ -42,7 +42,10 @@ async def _collect(chains: list, db: str) -> None:
         token=os.environ.get("MEMELAB_TELEGRAM_TOKEN", ""),
         chat_id=os.environ.get("MEMELAB_TELEGRAM_CHAT", ""),
         session=session)
-    collector = Collector(CollectorConfig(chains=chains), store, adapters, feed, alerter=alerter)
+    from .smartmoney import SmartMoney
+    smart = SmartMoney(store, session=session)
+    collector = Collector(CollectorConfig(chains=chains), store, adapters, feed,
+                          alerter=alerter, smart_money=smart)
     logging.info("memelab collecting on %s (alerts=%s)",
                  [c.value for c in chains], "on" if alerter.enabled else "stdout")
     try:
@@ -96,6 +99,7 @@ def _stats(db: str) -> None:
         print(f"tokens: {cov['total_tokens']}  snapshots: {cov['total_snapshots']}")
         for ch, s in cov["by_chain"].items():
             print(f"  {ch:10} {s['tokens']:>6} tokens  {s['winners'] or 0:>4} winners")
+        print("smart wallets:", store.smart_wallet_count())
         raw = store.active_signature()
         print("active signature:", "yes" if raw else "none")
     finally:
