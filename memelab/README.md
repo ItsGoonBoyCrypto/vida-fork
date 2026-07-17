@@ -78,6 +78,16 @@ schema (price, liquidity, volume/txns per window, socials). Chain-specific
 - `screener/engine.py`    — score live tokens against the signature
 - `api/app.py`        — query/serve signatures, screens, backtests (UI backend)
 
+## Unify with the RH scanner
+
+The two systems share intelligence both ways:
+- **scanner → memelab:** the scanner's 14 proven wallets seed memelab's
+  `robinhood` smart-money set (in code).
+- **memelab → scanner:** `python -m memelab export` prints memelab's
+  harvested Robinhood smart wallets (ready to paste into the scanner's
+  `RHL2_SMART_WALLETS`) plus the learned RH signature summary — so what memelab
+  backtests on RH can feed the scanner's scoring.
+
 ## Reuse from `rhl2_scanner`
 
 The RH scanner already has production-grade versions of several pieces —

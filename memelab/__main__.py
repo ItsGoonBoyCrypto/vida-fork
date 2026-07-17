@@ -94,6 +94,36 @@ async def _screen(chain: Chain, token: str, db: str) -> None:
         store.close()
 
 
+def build_export(store, chain: Chain) -> dict:
+    """Portable bridge artifact: harvested smart wallets + learned signature for
+    a chain — feeds the RH scanner (paste wallets into RHL2_SMART_WALLETS)."""
+    from .models import signature_from_json
+    wallets = sorted(store.smart_wallets(chain))
+    raw = store.active_signature()
+    sig = signature_from_json(raw) if raw else None
+    return {
+        "chain": chain.value,
+        "smart_wallets": wallets,
+        "signature": None if sig is None else {
+            "rules": sig.rules, "precision": sig.precision,
+            "trained_on": sig.trained_on, "notes": sig.notes},
+    }
+
+
+def _export(chain: Chain, db: str) -> None:
+    import json
+    store = Store(db)
+    try:
+        data = build_export(store, chain)
+        print(json.dumps(data, indent=2))
+        wl = data["smart_wallets"]
+        if wl:
+            print(f"\n# Paste into the RH scanner's RHL2_SMART_WALLETS ({len(wl)} wallets):")
+            print(",".join(wl))
+    finally:
+        store.close()
+
+
 def _stats(db: str) -> None:
     store = Store(db)
     try:
@@ -110,7 +140,7 @@ def _stats(db: str) -> None:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="memelab")
-    p.add_argument("command", choices=["collect", "backtest", "screen", "stats"])
+    p.add_argument("command", choices=["collect", "backtest", "screen", "stats", "export"])
     p.add_argument("token", nargs="?", help="token address for `screen`")
     p.add_argument("--chains", default="", help="comma list; default all")
     p.add_argument("--chain", default="base", help="chain for `screen`")
@@ -130,6 +160,9 @@ def main(argv=None) -> int:
         asyncio.run(_screen(Chain(a.chain), a.token, a.db))
     elif a.command == "stats":
         _stats(a.db)
+    elif a.command == "export":
+        # RH scanner is Robinhood-only; default export to it (--chain to override).
+        _export(Chain.ROBINHOOD if a.chain == "base" else Chain(a.chain), a.db)
     return 0
 
 
