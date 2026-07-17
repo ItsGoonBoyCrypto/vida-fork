@@ -87,6 +87,11 @@ class TokenSnapshot:
     smart_money_wallets: list = field(default_factory=list)
     dex_boosted: bool = False
 
+    # Social sentiment (LunarCrush; None = not covered / not fetched)
+    social_volume: Optional[float] = None      # interactions / mentions
+    social_sentiment: Optional[float] = None   # 0-100 (higher = more bullish)
+    social_score: Optional[float] = None       # LunarCrush galaxy-style 0-100
+
 
 @dataclass
 class TokenTimeSeries:

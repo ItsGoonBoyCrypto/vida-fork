@@ -30,6 +30,8 @@ _PRIOR_RULES = [
     ("lp_safe",            ">=", 1.0,  0.4),   # LP burned/locked
     ("launchpad_flag",     ">=", 1.0,  0.5),   # from a recognised launchpad
     ("has_socials",        ">=", 1.0,  0.3),   # has a community presence
+    ("social_sentiment",   ">=", 60.0, 0.4),   # bullish social lean (if covered)
+    ("social_volume",      ">=", 500.0, 0.3),  # real social traction (if covered)
 ]
 
 

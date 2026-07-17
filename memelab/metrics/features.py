@@ -18,6 +18,7 @@ FEATURE_NAMES = [
     "dev_holdings_pct", "bundle_pct", "sniper_pct", "smart_money_count",
     "has_socials", "launchpad_flag", "dex_boosted", "is_sellable",
     "authorities_ok", "lp_safe", "risk_score",
+    "social_volume", "social_sentiment", "social_score",
 ]
 
 
@@ -70,6 +71,9 @@ def _features_from(early: list, first: TokenSnapshot, last: TokenSnapshot) -> di
     f["lp_safe"] = 1.0 if last.lp_burned_or_locked else (
         0.0 if last.lp_burned_or_locked is False else None)
     f["risk_score"] = last.external_risk_score
+    f["social_volume"] = last.social_volume
+    f["social_sentiment"] = last.social_sentiment
+    f["social_score"] = last.social_score
     return {k: v for k, v in f.items() if v is not None}
 
 

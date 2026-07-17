@@ -43,9 +43,11 @@ async def _collect(chains: list, db: str) -> None:
         chat_id=os.environ.get("MEMELAB_TELEGRAM_CHAT", ""),
         session=session)
     from .smartmoney import SmartMoney
+    from .ingest.social import SocialFeed
     smart = SmartMoney(store, session=session)
+    social = SocialFeed(api_key=os.environ.get("MEMELAB_LUNARCRUSH_KEY", ""), session=session)
     collector = Collector(CollectorConfig(chains=chains), store, adapters, feed,
-                          alerter=alerter, smart_money=smart)
+                          alerter=alerter, smart_money=smart, social=social)
     logging.info("memelab collecting on %s (alerts=%s)",
                  [c.value for c in chains], "on" if alerter.enabled else "stdout")
     try:

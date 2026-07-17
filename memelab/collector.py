@@ -48,12 +48,13 @@ class CollectorConfig:
 
 class Collector:
     def __init__(self, cfg: CollectorConfig, store: Store, adapters: dict, feed,
-                 alerter=None, smart_money=None):
+                 alerter=None, smart_money=None, social=None):
         self.cfg = cfg
         self.store = store
         self.adapters = adapters        # {Chain: ChainAdapter}
         self.feed = feed                # DexScreenerFeed
         self.smart_money = smart_money  # SmartMoney | None
+        self.social = social            # SocialFeed | None
         from .alerting import TelegramAlerter
         from .screener.engine import Screener
         self.alerter = alerter or TelegramAlerter()
@@ -116,6 +117,15 @@ class Collector:
                         await self.smart_money.annotate(snap)
                     except Exception:
                         log.debug("smart-money %s failed", row["token_address"], exc_info=True)
+                if self.social is not None and self.social.enabled:
+                    try:
+                        m = await self.social.metrics_for(snap.symbol)
+                        if m:
+                            snap.social_volume = m.get("social_volume")
+                            snap.social_sentiment = m.get("social_sentiment")
+                            snap.social_score = m.get("social_score")
+                    except Exception:
+                        log.debug("social %s failed", snap.symbol, exc_info=True)
             snap.ts = time.time()
             self.store.record_snapshot(snap)
             await self._maybe_alert(chain, row["token_address"])
