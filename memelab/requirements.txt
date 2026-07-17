@@ -1,0 +1,2 @@
+aiohttp>=3.9
+# Optional (only for the dashboard API): fastapi, uvicorn

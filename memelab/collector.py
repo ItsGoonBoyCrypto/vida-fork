@@ -40,15 +40,26 @@ class CollectorConfig:
     track_hours: float = 72.0          # stop snapshotting a token after this
     relabel_interval_min: float = 60.0
     win_multiple: float = 3.0
+    # Alerting + autonomous backtest
+    alert_enabled: bool = True
+    min_alert_score: float = 65.0      # floor; screener also gates on signature precision
+    backtest_interval_min: float = 360.0  # re-derive the signature every 6h
 
 
 class Collector:
-    def __init__(self, cfg: CollectorConfig, store: Store, adapters: dict, feed):
+    def __init__(self, cfg: CollectorConfig, store: Store, adapters: dict, feed,
+                 alerter=None):
         self.cfg = cfg
         self.store = store
         self.adapters = adapters        # {Chain: ChainAdapter}
         self.feed = feed                # DexScreenerFeed
+        from .alerting import TelegramAlerter
+        from .screener.engine import Screener
+        self.alerter = alerter or TelegramAlerter()
+        self.screener = Screener(store)
+        self.screener.reload_signature()
         self._last_relabel = 0.0
+        self._last_backtest = 0.0
 
     async def run_forever(self) -> None:
         while True:
@@ -65,6 +76,7 @@ class Collector:
             except Exception:
                 log.exception("collect %s failed", chain.value)
         await self._maybe_relabel()
+        await self._maybe_backtest()
 
     async def _collect_chain(self, chain: Chain) -> None:
         adapter = self.adapters.get(chain)
@@ -93,6 +105,7 @@ class Collector:
                     log.debug("enrich %s failed", row["token_address"], exc_info=True)
             snap.ts = time.time()
             self.store.record_snapshot(snap)
+            await self._maybe_alert(chain, row["token_address"])
 
     def _due(self, row, safety: bool = False) -> bool:
         """Cadence gate: dense while hot, sparse while warm; safety even sparser."""
@@ -104,6 +117,39 @@ class Collector:
         interval = (self.cfg.hot_interval_min if age_min <= self.cfg.hot_window_min
                     else self.cfg.warm_interval_min)
         return since_min >= interval
+
+    async def _maybe_alert(self, chain: Chain, token_address: str) -> None:
+        """Screen the token against the signature; alert once if it scores high."""
+        if not self.cfg.alert_enabled or not self.screener.ready():
+            return
+        ts = self.store.time_series(chain, token_address)
+        if not ts.snapshots:
+            return
+        scr = self.screener.screen(chain, token_address, ts.snapshots)
+        floor = max(self.cfg.min_alert_score, self.screener.min_confident_score())
+        if scr.score < floor:
+            return
+        if not self.store.screen_alert_is_new(chain, token_address, scr.score):
+            return
+        from .alerting import format_screen_html
+        prec = self.screener._sig.precision if self.screener._sig else None
+        await self.alerter.send(format_screen_html(scr, prec))
+        log.info("ALERT %s $%s score=%.0f", chain.value, scr.snapshot.symbol, scr.score)
+
+    async def _maybe_backtest(self) -> None:
+        """Periodically re-derive the signature and reload it into the screener."""
+        now = time.time()
+        if (now - self._last_backtest) < self.cfg.backtest_interval_min * 60.0:
+            return
+        self._last_backtest = now
+        from .backtest.engine import run_backtest
+        try:
+            sig = run_backtest(self.store, win_multiple=self.cfg.win_multiple)
+            self.screener.reload_signature()
+            log.info("backtest: trained_on=%d precision=%s — %s",
+                     sig.trained_on, sig.precision, sig.notes)
+        except Exception:
+            log.exception("backtest failed")
 
     async def _maybe_relabel(self) -> None:
         now = time.time()

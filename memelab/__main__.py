@@ -27,17 +27,24 @@ def _chains(arg: str) -> list:
 
 
 async def _collect(chains: list, db: str) -> None:
+    import os
     import aiohttp
     from .collector import Collector, CollectorConfig
     from .chains.registry import get_adapter
     from .ingest.dexscreener import DexScreenerFeed
+    from .alerting import TelegramAlerter
 
     store = Store(db)
     session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
     adapters = {c: get_adapter(c, session=session) for c in chains}
     feed = DexScreenerFeed(session=session)
-    collector = Collector(CollectorConfig(chains=chains), store, adapters, feed)
-    logging.info("memelab collecting on %s", [c.value for c in chains])
+    alerter = TelegramAlerter(
+        token=os.environ.get("MEMELAB_TELEGRAM_TOKEN", ""),
+        chat_id=os.environ.get("MEMELAB_TELEGRAM_CHAT", ""),
+        session=session)
+    collector = Collector(CollectorConfig(chains=chains), store, adapters, feed, alerter=alerter)
+    logging.info("memelab collecting on %s (alerts=%s)",
+                 [c.value for c in chains], "on" if alerter.enabled else "stdout")
     try:
         await collector.run_forever()
     finally:

@@ -49,6 +49,13 @@ CREATE TABLE IF NOT EXISTS signatures (
     created_ts REAL NOT NULL,
     json       TEXT NOT NULL           -- serialised Signature (active = latest)
 );
+CREATE TABLE IF NOT EXISTS screen_alerts (
+    chain         TEXT NOT NULL,
+    token_address TEXT NOT NULL,
+    ts            REAL NOT NULL,
+    score         REAL,
+    PRIMARY KEY (chain, token_address)  -- one alert per token
+);
 """
 
 
@@ -187,6 +194,21 @@ class Store:
         row = self._conn.execute(
             "SELECT json FROM signatures ORDER BY created_ts DESC LIMIT 1").fetchone()
         return row["json"] if row else None
+
+    # -- screen-alert dedup ---------------------------------------------
+
+    def screen_alert_is_new(self, chain: Chain, token_address: str, score: float) -> bool:
+        """True (and records it) if this token hasn't been alerted before."""
+        cur = self._conn.execute(
+            "SELECT 1 FROM screen_alerts WHERE chain = ? AND token_address = ?",
+            (chain.value, token_address.lower()))
+        if cur.fetchone() is not None:
+            return False
+        self._conn.execute(
+            "INSERT INTO screen_alerts (chain, token_address, ts, score) VALUES (?, ?, ?, ?)",
+            (chain.value, token_address.lower(), time.time(), score))
+        self._conn.commit()
+        return True
 
     # -- coverage stats -------------------------------------------------
 
