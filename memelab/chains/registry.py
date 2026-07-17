@@ -68,13 +68,13 @@ REGISTRY: dict = {
 }
 
 
-def get_adapter(chain: Chain):
+def get_adapter(chain: Chain, session=None):
     """Construct the adapter for a chain (lazy import to avoid heavy deps)."""
     cfg = REGISTRY[chain]
     if chain.is_evm:
         from .evm import EvmAdapter
-        return EvmAdapter(cfg)
+        return EvmAdapter(cfg, session=session)
     if chain is Chain.SOLANA:
         from .solana import SolanaAdapter
-        return SolanaAdapter(cfg)
+        return SolanaAdapter(cfg, session=session)
     raise ValueError(f"no adapter for {chain}")

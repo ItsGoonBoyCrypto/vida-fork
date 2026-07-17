@@ -146,3 +146,22 @@ class Screen:
     score: float                          # 0-100 pump-likelihood
     matched_rules: list = field(default_factory=list)
     reasons: list = field(default_factory=list)
+
+
+# --- Signature serialization (persisted as JSON in the store) ---------------
+
+def signature_to_json(sig: Signature) -> str:
+    import json
+    from dataclasses import asdict
+    d = asdict(sig)
+    d["chains"] = [c.value if isinstance(c, Chain) else c for c in sig.chains]
+    return json.dumps(d)
+
+
+def signature_from_json(raw: str) -> Signature:
+    import json
+    from dataclasses import fields as _fields
+    d = json.loads(raw)
+    d["chains"] = [Chain(c) for c in d.get("chains", [])]
+    valid = {f.name for f in _fields(Signature)}
+    return Signature(**{k: v for k, v in d.items() if k in valid})

@@ -84,9 +84,34 @@ The RH scanner already has production-grade versions of several pieces —
 DexScreener client, honeypot sim, bundle/sniper analysis, smart-money, scoring,
 alerting, storage. The EVM adapter wraps those; Solana is the main net-new work.
 
+## Run it
+
+```
+python -m memelab collect                 # snapshot loop, all 4 chains (leave running)
+python -m memelab collect --chains solana,base
+python -m memelab backtest                # derive + validate a signature now
+python -m memelab screen 0xTOKEN --chain base
+python -m memelab stats                   # dataset coverage + signature status
+uvicorn "memelab.api.app:app"             # dashboard backend (pip install fastapi uvicorn)
+```
+
+Leave `collect` running — it accumulates the dataset the backtest learns from.
+Once enough tokens have aged ~48h, `backtest` produces a validated signature and
+`screen` (and the collector's alerting hook) start ranking live tokens.
+
 ## Status
 
-Scaffold: interfaces + data model + backtest methodology defined. Implementation
-order in `IMPLEMENTATION.md` sense: (1) storage + DexScreener ingest + snapshot
-loop, (2) EVM adapter over the RH code, (3) labeler + feature extraction,
-(4) backtest engine, (5) screener + API, (6) Solana adapter.
+**Implemented + tested (offline):**
+- data model, storage (SQLite point-in-time store), labeler, feature extraction
+- backtest engine (rule-mining + linear model, time-split validate: precision/recall/lift)
+- screener (score live tokens vs signature, signature (de)serialisation)
+- DexScreener ingest mapping (schema-verified with fixtures)
+- collector loop, CLI, read-only API
+- **28 tests** incl. a full-loop integration (record → relabel → backtest → screen)
+
+**Verified on deploy (network blocked from the build env):** live DexScreener
+HTTP, GoPlus (EVM) + RugCheck (Solana) enrichment calls.
+
+**Enhancements next:** per-chain source-level discovery (pump.fun / Raydium for
+Solana; DEX-factory + launchpad listeners for EVM — RH's already exist in
+rhl2_scanner); wiring the collector's alerting hook to the RH Telegram bot.
