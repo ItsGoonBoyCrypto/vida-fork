@@ -55,8 +55,8 @@ token — price/supply/reserve all internally consistent):
 
 `/diag` `/stats [h]` `/perf` `/inspect` · `/zero`/`/unzero`/`/muted` ·
 `/block`/`/unblock`/`/blocked` · `/smart`/`/unsmart`/`/smartlist` ·
-`/group`/`/ungroup`/`/groups` · `/wallet` `/deployer` `/flapstate` `/curveprobe`
-`/calibrate`
+`/group`/`/ungroup`/`/groups` · `/wallet` `/deployer` `/flapstate` `/curvepattern`
+`/curveprobe` `/calibrate`
 
 ## Ongoing (user)
 
@@ -64,4 +64,22 @@ token — price/supply/reserve all internally consistent):
   (Already fixed the "contract not verified" gate this way.)
 - Flip `RHL2_SMART_AUTOSEED=1` and `RHL2_WINNER_HARVEST=1` when ready.
 
-_182 tests passing. Last commit: flap curve pricing wired into scoring (getTokenV2 + learned ETH/USD)._
+## 🧬 Pre-migration curve pattern (NEW — learns the winning setup)
+
+Tracks on-curve flap tokens over time (curve velocity: how fast progress /
+reserve / holders climb — the strongest pre-graduation tell), learns the profile
+of tokens that graduated AND pumped ≥3x, and fires a **🧬 CURVE MATCH** alert on
+fresh tokens matching that profile while actively climbing.
+
+- `curve_pattern.py`: features + bootstrap prior + `match()` + `learn_profile()`
+  (percentile bands from winners; dependency-free).
+- Storage: `curve_observations` (time series) + `curve_setups` (labeled outcomes).
+- Scanner: `_track_curve()` (observe + match + alert), labeling hooked into the
+  winner-harvest reprice sweep, learned profile cached hourly, obs pruned to 7d.
+- `/curvepattern` shows the active profile + learning progress (winners needed).
+- Cold-start: uses the **bootstrap prior** until ≥5 graduated-3x winners exist,
+  then switches to the LEARNED profile automatically.
+- Config: `curve_pattern_enabled`, `curve_match_alert`, `curve_pattern_min_winners`,
+  `curve_obs_interval_seconds`, `curve_obs_retention_hours`.
+
+_198 tests passing. Last commit: pre-migration curve pattern (track → learn → 🧬 match)._

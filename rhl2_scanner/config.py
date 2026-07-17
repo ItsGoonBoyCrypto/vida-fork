@@ -355,6 +355,16 @@ class RuntimeConfig:
     early_launch_min_buy_ratio_1h: float = 0.0    # require net buying (0-1), when txn data exists
     early_launch_min_volume_1h_usd: float = 0.0   # require some real 1h volume, when known
 
+    # --- Pre-migration curve pattern (learned 'winning setup' matcher) ---
+    # Track on-curve flap tokens, learn the profile of ones that graduated AND
+    # pumped >= winner_harvest_win_mult, and fire a 🧬 curve-match alert on fresh
+    # tokens matching that profile while actively climbing.
+    curve_pattern_enabled: bool = True
+    curve_match_alert: bool = True                # send 🧬 alerts (off => track/learn only)
+    curve_pattern_min_winners: int = 5            # winners needed before the LEARNED profile is used
+    curve_obs_interval_seconds: float = 600       # persist an observation at most this often per token
+    curve_obs_retention_hours: float = 168        # prune observations older than this (7 days)
+
     # --- Paper trading / calibration ---
     paper_mode: bool = False                   # record would-be entries + realized outcomes
     # Record any safety-passing candidate at/above this composite (below the

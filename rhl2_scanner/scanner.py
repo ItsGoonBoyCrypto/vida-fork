@@ -33,6 +33,13 @@ from .filters import (
 from .models import AlertLevel, RiskTier, ScoreResult, TokenSnapshot
 from .paper import PaperTrader
 from .scoring import score_token
+from .curve_pattern import (
+    bootstrap_profile,
+    extract_features,
+    is_confirmed_climb,
+    learn_profile,
+    match as curve_match,
+)
 from .sources.chain import EvmChainClient
 from .sources.dexscreener import DexScreenerClient
 from .sources.poollistener import PoolListener
@@ -129,6 +136,9 @@ class Scanner:
         # Live ETH/USD, learned free from any graduated RH pair (priceUsd/priceNative).
         # Lets us convert flap's on-curve ETH figures into the USD the scorer uses.
         self._eth_usd: Optional[float] = None
+        # Cached pre-migration curve profile (learned winning setup, else prior).
+        self._curve_profile: Optional[dict] = None
+        self._curve_profile_ts: Optional[float] = None
         # Merge any persisted smart-money wallets (from prior /smart or autoseed)
         # into the config set so they take effect this run.
         self._merge_persisted_smart_wallets()
@@ -783,6 +793,178 @@ class Scanner:
         snap.market_cap_usd = price_usd * circ
         snap.liquidity_usd = (st["reserve"] / e18) * rate
 
+    # -- pre-migration curve pattern ------------------------------------
+
+    def _active_curve_profile(self) -> dict:
+        """The learned winning-setup profile if enough winners exist, else the
+        bootstrap prior. Cached for an hour to avoid re-deriving every cycle."""
+        now = time.time()
+        if (self._curve_profile is not None and self._curve_profile_ts
+                and now - self._curve_profile_ts < 3600):
+            return self._curve_profile
+        learned = None
+        try:
+            setups = self.storage.curve_setups()
+            learned = learn_profile(
+                setups, min_winners=self.cfg.runtime.curve_pattern_min_winners)
+        except Exception:
+            log.debug("curve profile learn failed", exc_info=True)
+        self._curve_profile = learned or bootstrap_profile()
+        self._curve_profile_ts = now
+        return self._curve_profile
+
+    def _is_on_curve(self, snap: TokenSnapshot) -> bool:
+        """A flap token still on the bonding curve (priced by getTokenV2, no DEX)."""
+        return (snap.curve_progress_pct is not None
+                and (snap.launchpad or "") == "flap")
+
+    async def _track_curve(self, snap: TokenSnapshot) -> None:
+        """Observe an on-curve token, match it to the winning profile, maybe alert."""
+        rc = self.cfg.runtime
+        if not rc.curve_pattern_enabled or not self._is_on_curve(snap):
+            return
+        now = time.time()
+        # Velocity baseline: the most recent observation at least one interval old,
+        # so Δ over ~10min is meaningful (not per-20s-cycle noise).
+        baseline = self.storage.curve_observation_before(
+            snap.token_address, now - rc.curve_obs_interval_seconds) \
+            or self.storage.last_curve_observation(snap.token_address)
+        feats = extract_features(snap, baseline, now)
+
+        # Persist at most once per interval so the table stays bounded.
+        last = self.storage.last_curve_observation(snap.token_address)
+        if last is None or now - float(last["ts"]) >= rc.curve_obs_interval_seconds:
+            self.storage.record_curve_observation(
+                snap.token_address, snap.curve_progress_pct, feats.get("reserve_eth"),
+                snap.market_cap_usd, snap.price_usd, snap.holder_count,
+                int(feats.get("smart_count") or 0), snap.age_minutes, 1)
+
+        if not rc.curve_match_alert or self.cfg.runtime.dry_run:
+            return
+        profile = self._active_curve_profile()
+        matched, score, hits, _misses = curve_match(feats, profile)
+        if matched and is_confirmed_climb(feats):
+            if self.storage.pos_event_new("curve_match|" + snap.token_address.lower()):
+                learned = self._curve_profile_is_learned()
+                await self._send_html(self._curve_match_html(snap, score, feats, learned))
+                log.info("CURVE MATCH $%s score=%.0f progress=%.0f%%",
+                         snap.symbol, score, snap.curve_progress_pct or 0)
+
+    def _curve_profile_is_learned(self) -> bool:
+        """Whether the active profile came from data (vs the bootstrap prior)."""
+        try:
+            setups = self.storage.curve_setups()
+            return learn_profile(
+                setups, min_winners=self.cfg.runtime.curve_pattern_min_winners) is not None
+        except Exception:
+            return False
+
+    def _curve_match_html(self, snap: TokenSnapshot, score: float, feats: dict,
+                          learned: bool) -> str:
+        from html import escape as _esc
+        src = "learned" if learned else "bootstrap"
+        prog = feats.get("progress") or 0
+        pv = feats.get("progress_velocity") or 0
+        hv = feats.get("holder_velocity") or 0
+        sym = _esc(snap.symbol or "???")
+        lines = [
+            f"🧬 <b>CURVE MATCH — ${sym}</b>  ({score:.0f}/100, {src})",
+            f"CA: <code>{snap.token_address}</code>",
+            f"Curve: {prog:.0f}% filled · climbing +{pv:.1f}%/h · "
+            f"holders +{hv:.1f}/h",
+            f"MCAP: ${self._fmt_usd(snap.market_cap_usd)} · "
+            f"Liq: ${self._fmt_usd(snap.liquidity_usd)}",
+        ]
+        if snap.smart_money_wallets:
+            lines.append(f"🧠 {len(snap.smart_money_wallets)} smart wallet(s) in")
+        lines.append("<i>Matches the winning pre-graduation setup — early entry, "
+                     "still on the curve.</i>")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _fmt_usd(x) -> str:
+        if not x:
+            return "?"
+        if x >= 1000:
+            return f"{x/1000:.1f}k"
+        return f"{x:.0f}"
+
+    def _curve_setup_features(self, token: str) -> dict:
+        """Summarise a token's on-curve trajectory into a learnable feature vector.
+
+        Built from the first and last stored observations: last-values for level
+        features, first→last slope for velocities. Mirrors extract_features so the
+        learned bands are comparable to what a live token is matched on.
+        """
+        first = self.storage.first_curve_observation(token)
+        last = self.storage.last_curve_observation(token)
+        if not first or not last:
+            return {}
+        dt_h = max((float(last["ts"]) - float(first["ts"])) / 3600.0, 1e-6)
+
+        def slope(col):
+            a, b = first[col], last[col]
+            return ((float(b) - float(a)) / dt_h) if (a is not None and b is not None) else 0.0
+
+        return {
+            "progress": last["progress"],
+            "progress_velocity": slope("progress"),
+            "reserve_eth": last["reserve_eth"],
+            "reserve_velocity": slope("reserve_eth"),
+            "mcap_usd": last["mcap_usd"],
+            "holders": last["holders"],
+            "holder_velocity": slope("holders"),
+            "smart_count": float(last["smart_count"] or 0),
+            "age_min": last["age_min"],
+        }
+
+    def _label_curve_setup(self, token: str, entry_price, peak_now, win_mult: float) -> None:
+        """Record a tracked on-curve token's setup + realized outcome (win >= mult).
+
+        Multiple is peak / curve-entry price, where peak is the best of the price
+        we saw on the curve and the current (post-graduation) reprice — capturing
+        both the on-curve run and any post-graduation pump.
+        """
+        if self.storage.has_curve_setup(token):
+            return
+        if self.storage.curve_observation_count(token) < 2:
+            return
+        first = self.storage.first_curve_observation(token)
+        entry = (first["price_usd"] if first and first["price_usd"] else entry_price) or 0
+        obs_peak = self.storage.curve_price_peak(token) or 0
+        peak = max(peak_now or 0, obs_peak)
+        mult = (peak / entry) if entry else 0.0
+        feats = self._curve_setup_features(token)
+        if not feats:
+            return
+        self.storage.save_curve_setup(token, feats, win=mult >= win_mult, peak_mult=mult)
+        log.info("curve setup labeled: %s mult=%.1fx win=%s", token, mult, mult >= win_mult)
+
+    def curvepattern_report(self) -> str:
+        """Text summary of the active curve profile + learning progress."""
+        wins, total = self.storage.curve_setup_counts()
+        tracked = len(self.storage.tracked_curve_tokens())
+        learned = self._curve_profile_is_learned()
+        need = self.cfg.runtime.curve_pattern_min_winners
+        profile = self._active_curve_profile()
+        lines = ["=== CURVE PATTERN ===",
+                 f"tracking {tracked} on-curve token(s)",
+                 f"labeled setups: {total} ({wins} winners ≥ "
+                 f"{self.cfg.runtime.winner_harvest_win_mult:.0f}x)",
+                 f"profile: {'LEARNED from winners' if learned else f'bootstrap prior (need {need} winners to learn)'}",
+                 ""]
+        for key, (lo, hi, w) in profile.items():
+            bound = []
+            if lo is not None:
+                bound.append(f"≥{lo:g}")
+            if hi is not None:
+                bound.append(f"≤{hi:g}")
+            lines.append(f"  {key}: {' and '.join(bound) or 'any'}  (w{w:g})")
+        lines.append("")
+        lines.append("🧬 alerts fire when a fresh on-curve token matches this "
+                     "profile AND is actively climbing.")
+        return "\n".join(lines)
+
     async def _calibrate_one(self, ca: str) -> dict:
         """Enrich + score one known winner; capture metrics + what blocked it."""
         assert self._session is not None
@@ -979,6 +1161,8 @@ class Scanner:
             "<code>/deployer 0xToken</code> — who created a token (finds a launchpad's manager)",
             "<code>/flapstate 0xToken</code> — live flap curve price + graduation progress "
             "(one call, Portal getTokenV2)",
+            "<code>/curvepattern</code> — the learned pre-migration winning-setup profile "
+            "+ 🧬 match progress",
             "<code>/curveprobe 0xToken [fn]</code> — raw getter probe (fallback; add a fn name "
             "for a single rate-limit-proof call)",
             "<code>/calibrate 0xCA1 0xCA2 …</code> — tune thresholds against your known winners",
@@ -1158,6 +1342,12 @@ class Scanner:
                 await self._send_html("<pre>" + _esc(await self.flapstate(arg)) + "</pre>")
             except Exception as exc:
                 await self._send_html("flapstate failed: " + __import__("html").escape(str(exc)))
+        elif cmd in ("curvepattern", "pattern"):
+            try:
+                from html import escape as _esc
+                await self._send_html("<pre>" + _esc(self.curvepattern_report()) + "</pre>")
+            except Exception as exc:
+                await self._send_html("curvepattern failed: " + __import__("html").escape(str(exc)))
         elif cmd in ("deployer", "creator"):
             if not valid_ca:
                 await self._send_html("Usage: <code>/deployer 0x&lt;token&gt;</code> "
@@ -1510,6 +1700,13 @@ class Scanner:
         self.storage.mark_seen(snap)
         self.storage.record_score(snap, result)
 
+        # Pre-migration curve tracking: observe on-curve flap tokens over time and
+        # fire a 🧬 alert when one matches the learned winning setup while climbing.
+        try:
+            await self._track_curve(snap)
+        except Exception:
+            log.debug("curve tracking failed", exc_info=True)
+
         # Paper mode records would-be entries (incl. below the alert band) for
         # calibration; it does not gate on cooldown so every candidate is logged.
         # Record on the LENIENT safety pass so that tokens whose safety is merely
@@ -1662,6 +1859,13 @@ class Scanner:
                 price = None
             if price is None or price <= 0:
                 continue
+            # If we tracked this token on the curve, label its pre-migration setup
+            # (win >= win_mult) so the curve-pattern matcher can learn from it.
+            if self.storage.curve_observation_count(token) >= 2:
+                try:
+                    self._label_curve_setup(token, entry, price, rc.winner_harvest_win_mult)
+                except Exception:
+                    log.debug("curve setup labeling failed", exc_info=True)
             if price / entry >= rc.winner_harvest_win_mult:
                 added = await self._harvest_buyers(token, row["symbol"] or "?",
                                                    source_prefix="winner")
@@ -1670,6 +1874,14 @@ class Scanner:
                          row["symbol"], price / entry, added)
         if winners:
             log.info("winner-harvest swept %d candidates, %d winners", len(due), winners)
+        # Keep the curve-observation table bounded.
+        try:
+            pruned = self.storage.prune_curve_observations(
+                self.cfg.runtime.curve_obs_retention_hours * 3600.0)
+            if pruned:
+                log.debug("pruned %d stale curve observations", pruned)
+        except Exception:
+            log.debug("curve prune failed", exc_info=True)
 
     async def _price_now(self, dex, pair: str, token: str):
         stub = TokenSnapshot(chain=self.cfg.chain.dexscreener_chain,

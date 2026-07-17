@@ -121,6 +121,35 @@ CREATE TABLE IF NOT EXISTS harvest_candidates (
     done         INTEGER DEFAULT 0   -- 1 once the retroactive sweep has processed it
 );
 CREATE INDEX IF NOT EXISTS idx_harvest_due ON harvest_candidates(done, entry_ts);
+
+-- Pre-migration curve observations: one row per on-curve flap token per cycle.
+-- The time series gives curve VELOCITY (how fast progress/reserve/holders climb),
+-- the strongest pre-graduation signal, and feeds the learned "winning setup".
+CREATE TABLE IF NOT EXISTS curve_observations (
+    token       TEXT NOT NULL,      -- lowercased token
+    ts          REAL NOT NULL,
+    progress    REAL,               -- graduation fill % (0-100)
+    reserve_eth REAL,
+    mcap_usd    REAL,
+    price_usd   REAL,
+    holders     INTEGER,
+    smart_count INTEGER,
+    age_min     REAL,
+    status      INTEGER,            -- flap status (1 tradable, 4 graduated)
+    PRIMARY KEY (token, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_curve_obs_token ON curve_observations(token, ts);
+
+-- Labeled pre-migration setups: a token's feature vector while it was on the
+-- curve, tagged win=1 once it graduated AND peaked >= win_mult (>=3x). The
+-- learned profile is derived from these.
+CREATE TABLE IF NOT EXISTS curve_setups (
+    token      TEXT PRIMARY KEY,    -- lowercased token
+    features   TEXT NOT NULL,       -- json feature vector of the pre-migration setup
+    win        INTEGER DEFAULT 0,   -- 1 if graduated AND peaked >= win_mult
+    peak_mult  REAL,
+    ts         REAL NOT NULL
+);
 """
 
 
@@ -481,6 +510,110 @@ class Storage:
         self._conn.execute(
             "UPDATE harvest_candidates SET done = 1 WHERE token = ?", (token.lower(),))
         self._conn.commit()
+
+    # -- pre-migration curve tracking (learned "winning setup") ----------
+
+    def record_curve_observation(self, token: str, progress: Optional[float],
+                                 reserve_eth: Optional[float], mcap_usd: Optional[float],
+                                 price_usd: Optional[float], holders: Optional[int],
+                                 smart_count: int, age_min: Optional[float],
+                                 status: Optional[int]) -> None:
+        """Append one on-curve observation (deduped to the second)."""
+        self._conn.execute(
+            "INSERT OR REPLACE INTO curve_observations "
+            "(token, ts, progress, reserve_eth, mcap_usd, price_usd, holders, "
+            "smart_count, age_min, status) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (token.lower(), round(time.time(), 0), progress, reserve_eth, mcap_usd,
+             price_usd, holders, smart_count, age_min, status),
+        )
+        self._conn.commit()
+
+    def last_curve_observation(self, token: str) -> Optional[sqlite3.Row]:
+        """The most recent observation strictly before now (for velocity)."""
+        cur = self._conn.execute(
+            "SELECT * FROM curve_observations WHERE token = ? "
+            "ORDER BY ts DESC LIMIT 1", (token.lower(),))
+        return cur.fetchone()
+
+    def first_curve_observation(self, token: str) -> Optional[sqlite3.Row]:
+        """The earliest observation — the pre-migration 'setup' snapshot."""
+        cur = self._conn.execute(
+            "SELECT * FROM curve_observations WHERE token = ? "
+            "ORDER BY ts ASC LIMIT 1", (token.lower(),))
+        return cur.fetchone()
+
+    def curve_observation_before(self, token: str, ts_cutoff: float) -> Optional[sqlite3.Row]:
+        """Most recent observation at or before a cutoff (velocity baseline)."""
+        cur = self._conn.execute(
+            "SELECT * FROM curve_observations WHERE token = ? AND ts <= ? "
+            "ORDER BY ts DESC LIMIT 1", (token.lower(), ts_cutoff))
+        return cur.fetchone()
+
+    def curve_observation_count(self, token: str) -> int:
+        cur = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM curve_observations WHERE token = ?",
+            (token.lower(),))
+        return int(cur.fetchone()["n"])
+
+    def tracked_curve_tokens(self) -> list[str]:
+        cur = self._conn.execute(
+            "SELECT DISTINCT token FROM curve_observations")
+        return [r["token"] for r in cur.fetchall()]
+
+    def curve_price_peak(self, token: str) -> Optional[float]:
+        """Highest price_usd observed while the token was on the curve."""
+        cur = self._conn.execute(
+            "SELECT MAX(price_usd) AS p FROM curve_observations WHERE token = ?",
+            (token.lower(),))
+        row = cur.fetchone()
+        return row["p"] if row and row["p"] is not None else None
+
+    def prune_curve_observations(self, older_than_s: float) -> int:
+        """Drop observations older than a cutoff (keeps the DB bounded)."""
+        cur = self._conn.execute(
+            "DELETE FROM curve_observations WHERE ts < ?",
+            (time.time() - older_than_s,))
+        self._conn.commit()
+        return cur.rowcount
+
+    def save_curve_setup(self, token: str, features: dict, win: bool,
+                         peak_mult: float) -> None:
+        """Record a token's pre-migration feature vector + its realized outcome."""
+        import json
+        self._conn.execute(
+            "INSERT OR REPLACE INTO curve_setups (token, features, win, peak_mult, ts) "
+            "VALUES (?,?,?,?,?)",
+            (token.lower(), json.dumps(features), 1 if win else 0, peak_mult, time.time()),
+        )
+        self._conn.commit()
+
+    def has_curve_setup(self, token: str) -> bool:
+        cur = self._conn.execute(
+            "SELECT 1 FROM curve_setups WHERE token = ?", (token.lower(),))
+        return cur.fetchone() is not None
+
+    def curve_setups(self, win_only: bool = False) -> list[dict]:
+        """All labeled setups as dicts with a parsed feature vector."""
+        import json
+        q = "SELECT * FROM curve_setups"
+        if win_only:
+            q += " WHERE win = 1"
+        out = []
+        for r in self._conn.execute(q).fetchall():
+            try:
+                feats = json.loads(r["features"])
+            except Exception:
+                feats = {}
+            out.append({"token": r["token"], "features": feats,
+                        "win": bool(r["win"]), "peak_mult": r["peak_mult"]})
+        return out
+
+    def curve_setup_counts(self) -> tuple[int, int]:
+        """(winners, total) labeled setups."""
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS total, COALESCE(SUM(win),0) AS wins "
+            "FROM curve_setups").fetchone()
+        return int(row["wins"]), int(row["total"])
 
     # -- activity snapshot (/stats) -------------------------------------
 
