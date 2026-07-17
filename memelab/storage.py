@@ -101,6 +101,14 @@ class Store:
     def close(self) -> None:
         self._conn.close()
 
+    def backup(self, dest_path: str) -> None:
+        """Online SQLite backup to dest_path (safe while the DB is in use)."""
+        dst = sqlite3.connect(dest_path)
+        try:
+            self._conn.backup(dst)
+        finally:
+            dst.close()
+
     # -- ingest ---------------------------------------------------------
 
     def record_snapshot(self, snap: TokenSnapshot) -> None:

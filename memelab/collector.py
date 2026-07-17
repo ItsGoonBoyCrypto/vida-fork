@@ -44,6 +44,10 @@ class CollectorConfig:
     alert_enabled: bool = True
     min_alert_score: float = 65.0      # floor; screener also gates on signature precision
     backtest_interval_min: float = 360.0  # re-derive the signature every 6h
+    # Ops
+    heartbeat_interval_min: float = 720.0   # 12h "alive + stats" digest
+    backup_interval_min: float = 1440.0     # daily dataset backup
+    backup_keep: int = 7
 
 
 class Collector:
@@ -68,6 +72,9 @@ class Collector:
         self.screener.reload_signature()
         self._last_relabel = 0.0
         self._last_backtest = 0.0
+        self._last_heartbeat = 0.0
+        self._last_backup = 0.0
+        self._last_snap_count = None
 
     async def run_forever(self) -> None:
         while True:
@@ -85,6 +92,8 @@ class Collector:
                 log.exception("collect %s failed", chain.value)
         await self._maybe_relabel()
         await self._maybe_backtest()
+        await self._maybe_heartbeat()
+        self._maybe_backup()
 
     async def _collect_chain(self, chain: Chain) -> None:
         adapter = self.adapters.get(chain)
@@ -173,6 +182,58 @@ class Collector:
                      sig.trained_on, sig.precision, sig.notes)
         except Exception:
             log.exception("backtest failed")
+
+    def heartbeat_text(self, stalled: bool) -> str:
+        cov = self.store.coverage()
+        raw = self.store.active_signature()
+        sig = "none"
+        if raw:
+            from .bootstrap import is_prior
+            from .models import signature_from_json
+            s = signature_from_json(raw)
+            sig = "prior" if is_prior(s) else f"learned (P={s.precision})"
+        by = " · ".join(f"{c}:{v['tokens']}" for c, v in cov["by_chain"].items()) or "—"
+        head = "⚠️ <b>memelab STALLED</b> — no new snapshots" if stalled else "💚 <b>memelab alive</b>"
+        return (f"{head}\n"
+                f"tokens {cov['total_tokens']} · snapshots {cov['total_snapshots']} · "
+                f"smart wallets {self.store.smart_wallet_count()}\n"
+                f"by chain: {by}\nsignature: {sig}")
+
+    async def _maybe_heartbeat(self) -> None:
+        now = time.time()
+        if (now - self._last_heartbeat) < self.cfg.heartbeat_interval_min * 60.0:
+            return
+        cov = self.store.coverage()
+        stalled = (self._last_snap_count is not None
+                   and cov["total_snapshots"] == self._last_snap_count)
+        self._last_snap_count = cov["total_snapshots"]
+        self._last_heartbeat = now
+        try:
+            if self.alerter is not None:
+                await self.alerter.send(self.heartbeat_text(stalled))
+            log.info("heartbeat sent (stalled=%s)", stalled)
+        except Exception:
+            log.exception("heartbeat failed")
+
+    def _maybe_backup(self) -> None:
+        now = time.time()
+        if (now - self._last_backup) < self.cfg.backup_interval_min * 60.0:
+            return
+        self._last_backup = now
+        path = self.store.path
+        if path in (":memory:", ""):
+            return
+        import glob
+        import os
+        try:
+            dest = f"{path}.bak.{int(now)}"
+            self.store.backup(dest)
+            backups = sorted(glob.glob(f"{path}.bak.*"))
+            for old in backups[:-self.cfg.backup_keep]:
+                os.remove(old)
+            log.info("dataset backup → %s (keeping %d)", dest, self.cfg.backup_keep)
+        except Exception:
+            log.exception("backup failed")
 
     async def _maybe_relabel(self) -> None:
         now = time.time()
