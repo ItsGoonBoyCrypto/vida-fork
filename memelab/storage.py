@@ -93,7 +93,11 @@ class Store:
             parent = os.path.dirname(path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-        self._conn = sqlite3.connect(path)
+        # check_same_thread=False: the API serves read-only routes on a threadpool,
+        # so the connection is touched from worker threads. Python's sqlite3 is
+        # serialized (threadsafety=3), so one shared connection is safe. The
+        # collector is single-threaded async and unaffected.
+        self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
