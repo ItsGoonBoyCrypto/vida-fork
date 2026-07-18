@@ -1650,15 +1650,44 @@ class Scanner:
         if self._curve_listener is None:
             self._curve_listener = LaunchpadCurveListener(self.cfg, session=self._session)
 
+        # Poll Telegram commands FIRST, so the bot stays responsive even if
+        # discovery/enrichment fails or stalls this cycle. A broken cycle must
+        # never mute /diag, /stats, etc. — that's how we lose the ability to
+        # debug it live.
+        try:
+            await self._poll_commands()
+        except Exception:
+            log.exception("command poll failed")
+
         # Three discovery streams: DexScreener (indexed), DEX factory logs
         # (earliest pool), and bonding-curve launchpad logs (earliest of all —
         # flap tokens before they graduate to a pool DexScreener can see).
-        dex_pairs, fresh_pairs, curve_stubs, bags_stubs = await asyncio.gather(
-            dex.fetch_new_pairs(),
-            self._listener.poll_new_pairs(),
-            self._curve_listener.poll_new_launches(),
-            self._poll_bags(),
-        )
+        # return_exceptions=True: one stream throwing must NOT abort the cycle
+        # (it would take alerts AND command-polling down with it).
+        try:
+            _streams = await asyncio.wait_for(
+                asyncio.gather(
+                    dex.fetch_new_pairs(),
+                    self._listener.poll_new_pairs(),
+                    self._curve_listener.poll_new_launches(),
+                    self._poll_bags(),
+                    return_exceptions=True,
+                ),
+                timeout=max(60.0, self.cfg.runtime.request_timeout_seconds * 6),
+            )
+        except asyncio.TimeoutError:
+            log.warning("discovery gather timed out — skipping discovery this cycle")
+            _streams = [[], [], [], []]
+        _labels = ("dexscreener", "poollistener", "curve", "bags")
+
+        def _stream(i):
+            r = _streams[i]
+            if isinstance(r, Exception):
+                log.warning("discovery stream '%s' failed: %r", _labels[i], r)
+                return []
+            return r
+        dex_pairs, fresh_pairs, curve_stubs, bags_stubs = (
+            _stream(0), _stream(1), _stream(2), _stream(3))
         # Bags registry stubs join the curve stubs (both are pre-graduation).
         curve_stubs = list(curve_stubs) + list(bags_stubs)
 
@@ -1766,8 +1795,8 @@ class Scanner:
                 (" missing_data=" + ",".join(missing)) if missing else "",
             )
 
-        # Handle inbound Telegram commands (/zero, /unzero, /muted).
-        await self._poll_commands()
+        # (Commands are polled at the TOP of the cycle now — see run_once start —
+        # so the bot stays responsive even if the scan above fails/stalls.)
 
         # Whale-wallet activity alerts (independent of the gem scan).
         await self._poll_wallets()
