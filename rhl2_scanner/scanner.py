@@ -142,6 +142,8 @@ class Scanner:
         self._curve_profile_ts: Optional[float] = None
         # Bags launchpad: registry discovery cursor (last-seen token count).
         self._bags_last_total: Optional[int] = None
+        # Last-cycle discovery-stream health (label -> "ok: N" / "ERR: …"), for /diag.
+        self._discovery_health: dict[str, str] = {}
         # Merge any persisted smart-money wallets (from prior /smart or autoseed)
         # into the config set so they take effect this run.
         self._merge_persisted_smart_wallets()
@@ -410,6 +412,14 @@ class Scanner:
             f"exits: {'on' if rc.smart_exit_enabled else 'off'} | "
             f"milestones: {'/'.join(f'{m:g}x' for m in rc.milestone_multiples) if rc.position_monitor_enabled else 'off'} | "
             f"dump guard: {('−%.0f%% from peak' % rc.dump_drawdown_pct) if rc.position_monitor_enabled else 'off'}")
+
+        # Last-cycle discovery-stream health — the fast tell for "why zero alerts":
+        # an ERR here is the stream that's throwing (now isolated, not muting the bot).
+        if self._discovery_health:
+            lines.append("discovery streams (last cycle): " + " | ".join(
+                f"{k}={v}" for k, v in self._discovery_health.items()))
+        else:
+            lines.append("discovery streams: no cycle completed yet")
 
         lines.append("")
         if method_ok and addr_ok:
@@ -1684,7 +1694,9 @@ class Scanner:
             r = _streams[i]
             if isinstance(r, Exception):
                 log.warning("discovery stream '%s' failed: %r", _labels[i], r)
+                self._discovery_health[_labels[i]] = f"ERR: {type(r).__name__}: {r}"
                 return []
+            self._discovery_health[_labels[i]] = f"ok: {len(r)}"
             return r
         dex_pairs, fresh_pairs, curve_stubs, bags_stubs = (
             _stream(0), _stream(1), _stream(2), _stream(3))
