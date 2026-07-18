@@ -74,16 +74,21 @@ chain:
     # robinhoodchain.blockscout.com before trusting it — the addresses below are
     # from public research, not on-chain-confirmed by the bot.
     - name: robinfun
-      # RobinFunFactory (source-verified): 0xD952A74C85a2221a7DaB185c62cfD7EBa8C94AFC
-      # curve → 100%-burned LP at ~$44k. Emits a token-creation event + a `Migrated`
-      # graduation event. To finish pre-grad: set RHL2_ROBINFUN_MANAGER to the
-      # factory, read `curve discovery [robinfun]` host logs for the creation
-      # topic0 + token slot, then set RHL2_ROBINFUN_CREATE_TOPIC (+ token_arg).
-      # Alternatively, on Blockscout's Read-Contract tab find the fn that takes a
-      # token address → bonding state and set RHL2_ROBINFUN_CONFIRM_FN to it.
-      manager: ""            # RHL2_ROBINFUN_MANAGER
+      # RobinFunFactory (source-verified): 0xD952A74C85a2221a7DaB185c62cfD7EBa8C94AFC.
+      # RobinFun shares the Bags contract design — the factory exposes a
+      # curveForToken(token) registry that returns the token's bonding curve
+      # (non-zero) for one of ITS tokens, so we confirm non-suffix candidates that
+      # way. Graduated RobinFun tokens are already caught via DexScreener; this
+      # adds detection + origin labeling. Pre-grad PRICING needs the RobinFun lens
+      # address (getTokenState) — not yet wired; set RHL2_ROBINFUN_MANAGER to a
+      # verified lens + a confirm_fn if/when you have it.
+      # NOTE: curveForToken is a best-guess from the shared architecture. If the
+      # host logs show `curve discovery [robinfun]` lines instead of catches, the
+      # fn name differs — paste one line and we pin the exact create_topic.
+      manager: "0xD952A74C85a2221a7DaB185c62cfD7EBa8C94AFC"   # RHL2_ROBINFUN_MANAGER overrides
       kind: curve
-      create_topic: ""       # RHL2_ROBINFUN_CREATE_TOPIC (blank => discovery)
+      create_topic: ""       # RHL2_ROBINFUN_CREATE_TOPIC (blank => discovery+confirm)
+      confirm_fn: "curveForToken(address)"
       token_arg: topic1
       boost: 12
     - name: bags
