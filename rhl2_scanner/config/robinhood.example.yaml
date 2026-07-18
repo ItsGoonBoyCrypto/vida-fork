@@ -92,14 +92,12 @@ chain:
       token_arg: topic1
       boost: 12
     - name: bags
-      # bags.fm — FULLY WIRED. Discovery uses the BagsFactory registry
+      # bags.fm — FULLY WIRED + LIVE. Discovery uses the BagsFactory registry
       # (allTokensLength + getTokens tail — no log/topic needed); pricing uses
       # BagsLens.getTokenState(token) → exists/migrated/price/progress/reserves.
-      # Enable with TWO host Variables (grab both from the Bags RH deploy):
-      #   RHL2_BAGS_MANAGER  = the BagsLens address   (or RHL2_BAGS_LENS)
-      #   RHL2_BAGS_FACTORY  = the BagsFactory address (enables registry discovery)
-      manager: ""            # RHL2_BAGS_MANAGER / RHL2_BAGS_LENS  (BagsLens)
-      factory: ""            # RHL2_BAGS_FACTORY  (BagsFactory registry)
+      # Addresses from the Bags RH mainnet deploy (docs.bags.fm/robinhood).
+      manager: "0xC82Db941dAf90B754aecb5F7D14c683dc608d595"   # BagsLens (RHL2_BAGS_MANAGER/_LENS overrides)
+      factory: "0xe8Cc4431adF8b5A847C113EF0c6af9043219Cb37"   # BagsFactory proxy (RHL2_BAGS_FACTORY overrides)
       kind: curve
       boost: 12
       confirm_fn: "getTokenState(address)"
