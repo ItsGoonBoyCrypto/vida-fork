@@ -1217,8 +1217,8 @@ class Scanner:
             self._cmd_offset = int(saved) if saved is not None else None
         try:
             updates, nxt = await get_updates(tg.bot_token, self._cmd_offset, self._session)
-        except Exception:
-            log.debug("command poll failed")
+        except Exception as exc:
+            log.warning("command poll failed: %r", exc)
             return
         for u in updates:
             msg = u.get("message") or u.get("channel_post") or u.get("edited_channel_post") or {}

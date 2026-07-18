@@ -99,6 +99,13 @@ async def get_updates(token: str, offset: Optional[int] = None,
             params["offset"] = offset
         data = await _call(token, "getUpdates", params, session)
         if not data or not data.get("ok"):
+            if data and data.get("error_code") == 409:
+                log.warning(
+                    "getUpdates 409 Conflict — ANOTHER instance is polling this bot "
+                    "token. Commands (/smart, /diag, …) are dropped until you delete "
+                    "the duplicate service so only ONE process polls this token.")
+            elif data:
+                log.warning("getUpdates not ok: %s", data.get("description") or data)
             return [], offset
         updates = data.get("result", [])
         next_offset = (updates[-1]["update_id"] + 1) if updates else offset
