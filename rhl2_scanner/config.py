@@ -234,6 +234,19 @@ class Thresholds:
     max_bundle_pct: float = 20.0
     skip_bundle_pct: float = 35.0
     max_sniper_cluster_pct: float = 25.0
+    # The sniper-cluster % is only meaningful once a token has aged PAST its
+    # launch window — on a token that's minutes old, essentially everyone bought
+    # "at launch", so the metric pins near 100% and would wrongly skip every fresh
+    # gem. Only enforce the ceiling once the token is at least this old.
+    sniper_cluster_min_age_minutes: float = 45.0
+    # Safety-score floor for a token that PASSED the gate (no confirmable danger).
+    # On data-poor chains (RH Chain: no verification, no GoPlus, V3 LP unreadable)
+    # every safety-positive signal is UNKNOWN, so score_safety would give 0 —
+    # which, at safety's 0.38 weight, caps the composite below the alert band and
+    # makes the maturity tier unreachable. A moderate floor says "clean gate pass,
+    # extras unconfirmed" so quality tokens can still score into the band. 0 keeps
+    # the old behaviour (chains where these signals ARE available).
+    safety_baseline: float = 0.0
 
     # Safety
     max_dev_holdings_pct: float = 5.0

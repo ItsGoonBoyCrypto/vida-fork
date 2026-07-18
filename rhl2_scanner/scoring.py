@@ -60,7 +60,13 @@ def score_safety(t: TokenSnapshot, th: Thresholds, weight: float) -> CategorySco
     """
     s = t.safety
     cs = CategoryScore(name="safety", raw=0.0, weight=weight)
-    pts = 0.0
+    # Floor for "passed the gate, no confirmable danger" — see safety_baseline.
+    # On data-poor chains this keeps the maturity tier reachable; positive
+    # confluence below still adds on top (and the whole score is moot if the
+    # token later fails the gate, which floors the composite anyway).
+    pts = float(getattr(th, "safety_baseline", 0.0) or 0.0)
+    if pts:
+        cs.reasons.append("clean gate (extras unconfirmed)")
 
     if s.contract_verified:
         pts += 15

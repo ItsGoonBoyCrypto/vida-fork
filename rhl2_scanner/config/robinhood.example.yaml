@@ -158,6 +158,16 @@ tiers:
       max_bundle_pct: 6             # bundle scoring reason threshold
       skip_bundle_pct: 22           # was 15 — allow more early clustering
       max_sniper_cluster_pct: 22    # was 15 — early buyers cluster naturally
+      # ...but only enforce it once the token has aged past its launch window —
+      # on a minutes-old token the metric pins ~100% (everyone bought at launch)
+      # and would wrongly hard-skip every fresh gem.
+      sniper_cluster_min_age_minutes: 45
+      # RH Chain gives no verification / GoPlus / readable V3 LP, so score_safety
+      # would be 0 for every token — and at safety's 0.38 weight the composite
+      # then maxes at 62, below the 63 watch band (maturity tier unreachable).
+      # This floor = "passed the gate, no confirmable danger" so quality tokens
+      # can still score into the band on momentum + distribution + discovery.
+      safety_baseline: 45
       max_dev_holdings_pct: 10      # KEPT — dev holding >10% is a real red flag
       max_tax_pct: 1                # HARD skip if KNOWN tax above 1% each
       min_lp_lock_seconds: 0        # 0 = any lock duration accepted

@@ -177,8 +177,14 @@ def safety_gate(t: TokenSnapshot, th: Thresholds, strict: bool = True,
         fails.append(f"top1 {t.top1_supply_pct:.1f}% > {th.max_top1_pct:.0f}%")
     if s.bundle_supply_pct is not None and s.bundle_supply_pct > th.skip_bundle_pct:
         fails.append(f"bundled {s.bundle_supply_pct:.1f}% > skip {th.skip_bundle_pct:.0f}%")
-    if th.max_sniper_cluster_pct and s.sniper_cluster_pct is not None \
-            and s.sniper_cluster_pct > th.max_sniper_cluster_pct:
+    # Sniper-cluster ceiling — only meaningful once the token has aged past its
+    # launch window. On a minutes-old token "everyone bought at launch" so the
+    # metric pins ~100% and is uninformative; enforcing it there skips every fresh
+    # gem. Require a known age at/above the floor before gating on it.
+    if (th.max_sniper_cluster_pct and s.sniper_cluster_pct is not None
+            and t.age_minutes is not None
+            and t.age_minutes >= th.sniper_cluster_min_age_minutes
+            and s.sniper_cluster_pct > th.max_sniper_cluster_pct):
         fails.append(f"sniper cluster {s.sniper_cluster_pct:.1f}% > {th.max_sniper_cluster_pct:.0f}%")
 
     return GateResult(passed=not fails, failures=fails)
