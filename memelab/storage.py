@@ -271,6 +271,20 @@ class Store:
                 "SELECT COUNT(*) FROM smart_wallets WHERE chain = ?", (chain.value,)).fetchone()[0]
         return self._conn.execute("SELECT COUNT(*) FROM smart_wallets").fetchone()[0]
 
+    def smart_wallets_detailed(self) -> list:
+        """All smart wallets across chains with source + added-time (newest first)."""
+        cur = self._conn.execute(
+            "SELECT chain, wallet, source, ts FROM smart_wallets ORDER BY ts DESC")
+        return [{"chain": r["chain"], "wallet": r["wallet"],
+                 "source": r["source"], "ts": r["ts"]} for r in cur.fetchall()]
+
+    def remove_smart_wallet(self, chain: Chain, wallet: str) -> bool:
+        cur = self._conn.execute(
+            "DELETE FROM smart_wallets WHERE chain = ? AND wallet = ?",
+            (chain.value, wallet.lower()))
+        self._conn.commit()
+        return cur.rowcount > 0
+
     def mark_harvested(self, chain: Chain, token: str) -> bool:
         """True if not yet harvested (and records it)."""
         cur = self._conn.execute(

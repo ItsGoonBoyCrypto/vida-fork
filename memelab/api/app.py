@@ -16,7 +16,7 @@ from ..storage import Store
 
 def create_app(db: str = "memelab.db"):
     try:
-        from fastapi import FastAPI, Query
+        from fastapi import Body, FastAPI, Header, Query
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("pip install fastapi uvicorn to serve the API") from exc
 
@@ -65,6 +65,34 @@ def create_app(db: str = "memelab.db"):
         return {"chain": chain, "token": address, "outcome": ts.outcome.value,
                 "peak_multiple": ts.peak_multiple, "snapshots": len(ts.snapshots),
                 "entry_price": ts.entry_price}
+
+    @api.get("/smart-wallets")
+    def smart_wallets_list():
+        return {"items": store.smart_wallets_detailed(),
+                "locked": bool(os.environ.get("MEMELAB_ADMIN_KEY"))}
+
+    @api.post("/smart-wallets")
+    def smart_wallets_add(payload: dict = Body(default={}),
+                          x_admin_key: str = Header(default="")):
+        # Optional guard: if MEMELAB_ADMIN_KEY is set, require it (header or body).
+        key = os.environ.get("MEMELAB_ADMIN_KEY", "")
+        if key and (x_admin_key or payload.get("key")) != key:
+            return {"ok": False, "error": "unauthorized"}
+        chain_s = str(payload.get("chain") or "robinhood").strip().lower()
+        wallet = str(payload.get("wallet") or "").strip()
+        remove = bool(payload.get("remove"))
+        try:
+            chain = Chain(chain_s)
+        except ValueError:
+            return {"ok": False, "error": f"unknown chain '{chain_s}'"}
+        # Basic address sanity (EVM 0x… or Solana base58) — just non-empty + length.
+        if not wallet or len(wallet) < 32:
+            return {"ok": False, "error": "invalid wallet address"}
+        if remove:
+            gone = store.remove_smart_wallet(chain, wallet)
+            return {"ok": True, "removed": gone, "count": store.smart_wallet_count()}
+        added = store.add_smart_wallet(chain, wallet, source="dashboard")
+        return {"ok": True, "added": added, "count": store.smart_wallet_count()}
 
     @api.get("/winners")
     def winners(chain: str | None = Query(default=None), min_mult: float = 3.0):

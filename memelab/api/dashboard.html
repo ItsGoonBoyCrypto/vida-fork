@@ -48,6 +48,15 @@
   .empty{color:var(--muted);font-family:var(--mono);font-size:.85rem;padding:1.5rem;text-align:center}
   a{color:var(--accent);text-decoration:none}
   .muted{color:var(--muted)}
+  .addrow{display:flex;gap:.5rem;flex-wrap:wrap}
+  .addrow input,.addrow select{font-family:var(--mono);font-size:.85rem;background:var(--surface2);
+    color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:.5rem .7rem}
+  .addrow input#w-addr{flex:1;min-width:220px}
+  .addrow button{font-family:var(--mono);font-size:.85rem;font-weight:600;background:var(--accent);
+    color:#0d1418;border:0;border-radius:8px;padding:.5rem 1.1rem;cursor:pointer}
+  .addrow button:disabled{opacity:.5;cursor:default}
+  .x{cursor:pointer;color:var(--muted);font-family:var(--mono)}
+  .x:hover{color:var(--signal)}
 </style>
 </head>
 <body>
@@ -60,6 +69,26 @@
 
   <p class="eyebrow">Coverage</p>
   <div class="tiles" id="tiles"></div>
+
+  <p class="eyebrow">Smart wallets</p>
+  <div class="card">
+    <div class="addrow">
+      <input id="w-addr" placeholder="0x… wallet address" autocomplete="off" spellcheck="false">
+      <select id="w-chain">
+        <option value="robinhood">robinhood</option>
+        <option value="solana">solana</option>
+        <option value="ethereum">ethereum</option>
+        <option value="base">base</option>
+      </select>
+      <input id="w-key" placeholder="admin key" autocomplete="off" style="display:none">
+      <button id="w-add">Add</button>
+    </div>
+    <div id="w-msg" class="reasons" style="margin:.5rem 0 0;min-height:1em"></div>
+    <div class="tablewrap" style="margin-top:.9rem"><table>
+      <thead><tr><th>Chain</th><th>Wallet</th><th>Source</th><th></th></tr></thead>
+      <tbody id="w-rows"><tr><td colspan="4" class="empty">loading…</td></tr></tbody>
+    </table></div>
+  </div>
 
   <p class="eyebrow">Active signature</p>
   <div class="card" id="sig"><span class="empty">loading…</span></div>
@@ -76,6 +105,37 @@ const CHAIN = {robinhood:'var(--rh)', solana:'var(--sol)', ethereum:'var(--eth)'
 const usd = n => n==null ? '—' : n>=1e6 ? '$'+(n/1e6).toFixed(2)+'M' : n>=1e3 ? '$'+(n/1e3).toFixed(0)+'k' : '$'+Math.round(n);
 const age = m => m==null ? '—' : m<60 ? m.toFixed(0)+'m' : m<1440 ? (m/60).toFixed(1)+'h' : (m/1440).toFixed(1)+'d';
 async function j(u){ try{const r=await fetch(u);return r.ok?await r.json():null;}catch(e){return null;} }
+
+async function loadWallets(){
+  const d = await j('smart-wallets');
+  const rows = document.getElementById('w-rows');
+  if(document.getElementById('w-key')) document.getElementById('w-key').style.display = d&&d.locked ? '' : 'none';
+  if(!d || !d.items || !d.items.length){ rows.innerHTML = '<tr><td colspan="4" class="empty">no smart wallets yet — add your best below</td></tr>'; return; }
+  rows.innerHTML = d.items.map(w=>{
+    const col = CHAIN[w.chain]||'var(--muted)';
+    return `<tr>
+      <td><span class="chip" style="background:${col}">${w.chain}</span></td>
+      <td style="font-family:var(--mono);font-size:.8rem">${w.wallet}</td>
+      <td class="muted" style="font-family:var(--mono);font-size:.75rem">${w.source||''}</td>
+      <td><span class="x" data-w="${w.wallet}" data-c="${w.chain}" title="remove">✕</span></td></tr>`;
+  }).join('');
+  rows.querySelectorAll('.x').forEach(el=>el.onclick=()=>mutateWallet(el.dataset.w, el.dataset.c, true));
+}
+async function mutateWallet(wallet, chain, remove){
+  const key = document.getElementById('w-key').value.trim();
+  const msg = document.getElementById('w-msg');
+  const r = await fetch('smart-wallets',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({wallet, chain, remove, key})});
+  const d = r.ok ? await r.json() : null;
+  if(d && d.ok){ msg.style.color='var(--accent)'; msg.textContent = remove?'Removed.':(d.added?'Added ✓':'Already tracked'); loadWallets(); }
+  else { msg.style.color='var(--signal)'; msg.textContent = (d&&d.error)||'failed'; }
+}
+document.getElementById('w-add').onclick=()=>{
+  const a=document.getElementById('w-addr'), c=document.getElementById('w-chain');
+  if(!a.value.trim()){return;}
+  mutateWallet(a.value.trim(), c.value, false); a.value='';
+};
+document.getElementById('w-addr').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('w-add').click(); });
 
 async function refresh(){
   const stats = await j('stats');
@@ -112,7 +172,7 @@ async function refresh(){
 
   document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
 }
-refresh(); setInterval(refresh, 30000);
+refresh(); loadWallets(); setInterval(refresh, 30000); setInterval(loadWallets, 30000);
 </script>
 </body>
 </html>
