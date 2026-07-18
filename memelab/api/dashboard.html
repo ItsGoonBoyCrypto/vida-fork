@@ -23,6 +23,8 @@
   header h1{font-size:1.4rem;margin:0}
   .live{font-family:var(--mono);font-size:.72rem;color:var(--accent);text-transform:uppercase;letter-spacing:.15em}
   .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:2.2rem 0 .8rem}
+  .eyebrow.toggle{cursor:pointer;user-select:none}
+  .eyebrow.toggle:hover{color:var(--ink)}
   .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
   .tile{background:var(--surface);padding:1.1rem 1.2rem}
   .tile .k{font-family:var(--mono);font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
@@ -70,8 +72,8 @@
   <p class="eyebrow">Coverage</p>
   <div class="tiles" id="tiles"></div>
 
-  <p class="eyebrow">Smart wallets</p>
-  <div class="card">
+  <p class="eyebrow toggle" id="w-toggle">▸ Smart wallets <span class="muted" id="w-count" style="text-transform:none;letter-spacing:0"></span></p>
+  <div class="card" id="w-card" hidden>
     <div class="addrow">
       <input id="w-addr" placeholder="0x… wallet address" autocomplete="off" spellcheck="false">
       <select id="w-chain">
@@ -106,9 +108,19 @@ const usd = n => n==null ? '—' : n>=1e6 ? '$'+(n/1e6).toFixed(2)+'M' : n>=1e3 
 const age = m => m==null ? '—' : m<60 ? m.toFixed(0)+'m' : m<1440 ? (m/60).toFixed(1)+'h' : (m/1440).toFixed(1)+'d';
 async function j(u){ try{const r=await fetch(u);return r.ok?await r.json():null;}catch(e){return null;} }
 
+// Collapsible smart-wallets section (default collapsed so tokens stay prominent).
+function setWalletsOpen(open){
+  document.getElementById('w-card').hidden = !open;
+  document.getElementById('w-toggle').firstChild.nodeValue = (open?'▾':'▸') + ' Smart wallets ';
+  try{ localStorage.setItem('w-open', open?'1':'0'); }catch(e){}
+}
+document.getElementById('w-toggle').onclick=()=>setWalletsOpen(document.getElementById('w-card').hidden);
+setWalletsOpen((()=>{ try{ return localStorage.getItem('w-open')==='1'; }catch(e){ return false; } })());
+
 async function loadWallets(){
   const d = await j('smart-wallets');
   const rows = document.getElementById('w-rows');
+  document.getElementById('w-count').textContent = d&&d.items ? `(${d.items.length})` : '';
   if(document.getElementById('w-key')) document.getElementById('w-key').style.display = d&&d.locked ? '' : 'none';
   if(!d || !d.items || !d.items.length){ rows.innerHTML = '<tr><td colspan="4" class="empty">no smart wallets yet — add your best below</td></tr>'; return; }
   rows.innerHTML = d.items.map(w=>{

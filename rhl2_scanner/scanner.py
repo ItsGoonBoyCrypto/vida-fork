@@ -164,11 +164,19 @@ class Scanner:
             "on" if (tg.bot_token and tg.alert_chat_id) else "OFF (needs token+chat)",
             n_smart,
         )
+        # Real persistence check: a boot counter in the DB. If it stays at 1
+        # across redeploys, the volume ISN'T actually persisting (data resets).
+        try:
+            boot = int(self.storage.kv_get("boot_count") or 0) + 1
+            self.storage.kv_set("boot_count", str(boot))
+        except Exception:  # noqa: BLE001
+            boot = -1
         log.info(
-            "scanner up | chain=%s tier=%s dry_run=%s",
+            "scanner up | chain=%s tier=%s dry_run=%s | boot #%d%s",
             self.cfg.chain.dexscreener_chain,
             self.cfg.active_tier.value,
-            self.cfg.runtime.dry_run,
+            self.cfg.runtime.dry_run, boot,
+            "  ⚠️ (still 1 after redeploys ⇒ DB volume NOT persisting)" if boot == 1 else "",
         )
         await self._send_startup_message()
         try:
@@ -285,11 +293,16 @@ class Scanner:
                  f"(+{len(self.storage.smart_wallets())} smart / "
                  f"{len(self.storage.blocked_symbols())} blocked from runtime, "
                  f"the part the Volume persists)")
-        if persistent:
-            lines.append(f"DB: {db} — persistent (Volume) · {state}")
+        boot = self.storage.kv_get("boot_count") or "?"
+        # boot_count is the real test: >1 proves the DB survived a redeploy.
+        if boot not in ("?", "1"):
+            lines.append(f"DB: {db} — ✅ persisting (boot #{boot}) · {state}")
+        elif persistent:
+            lines.append(f"DB: {db} — volume configured, boot #{boot} "
+                         f"(redeploy once; if still #1 the volume isn't mounted) · {state}")
         else:
-            lines.append(f"DB: {db} — ⚠️ EPHEMERAL (attach a Railway Volume at its "
-                         f"dir to keep autoseed/blocks/mutes) · {state}")
+            lines.append(f"DB: {db} — ⚠️ EPHEMERAL (boot #{boot}; attach a Railway Volume "
+                         f"at its dir to keep data) · {state}")
         if not rpc:
             return "\n".join(lines + ["RPC url is not set — set RHL2_RPC_URL."])
 
