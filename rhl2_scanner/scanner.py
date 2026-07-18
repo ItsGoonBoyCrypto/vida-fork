@@ -134,6 +134,7 @@ class Scanner:
         self._last_harvest_ts: Optional[float] = None
         self._wallet_watcher = None  # bound to the shared session in run_once
         self._cmd_offset = None      # Telegram getUpdates offset (loaded from db)
+        self._reply_chat = None      # during command handling, reply to the sender's chat
         # Live ETH/USD, learned free from any graduated RH pair (priceUsd/priceNative).
         # Lets us convert flap's on-curve ETH figures into the USD the scorer uses.
         self._eth_usd: Optional[float] = None
@@ -189,12 +190,14 @@ class Scanner:
         self._stop.set()
 
     async def _send_html(self, text: str) -> None:
-        """Send an HTML message to the alert channel (or stdout in dry-run)."""
+        """Send HTML to the alert channel — or, while handling a command, back to
+        whichever chat the command came from (so DM commands reply in the DM)."""
         tg = self.cfg.telegram
-        if tg.bot_token and tg.alert_chat_id:
+        chat = self._reply_chat or tg.alert_chat_id
+        if tg.bot_token and chat:
             from .tgtools import send_message
             try:
-                await send_message(tg.bot_token, tg.alert_chat_id, text, self._session)
+                await send_message(tg.bot_token, chat, text, self._session)
                 return
             except Exception:
                 log.exception("send failed")
@@ -1236,11 +1239,20 @@ class Scanner:
             text = (msg.get("text") or "").strip()
             if not text.startswith("/"):
                 continue
-            if str(chat.get("id")) != str(tg.alert_chat_id):
-                log.info("ignoring command from chat %s (expected %s)", chat.get("id"), tg.alert_chat_id)
+            chat_id = str(chat.get("id"))
+            from_id = (msg.get("from") or {}).get("id")
+            is_alert = chat_id == str(tg.alert_chat_id)
+            is_private = chat.get("type") == "private"          # a DM to the bot
+            is_admin = bool(tg.admin_user_ids) and from_id in tg.admin_user_ids
+            if not (is_alert or is_private or is_admin):
+                log.info("ignoring command from chat %s (not alert chat / DM / admin)", chat_id)
                 continue
-            log.info("command: %s", text)
-            await self._handle_command(text)
+            log.info("command: %s (chat=%s)", text, chat_id)
+            self._reply_chat = chat_id      # reply where the command came from
+            try:
+                await self._handle_command(text)
+            finally:
+                self._reply_chat = None
         if nxt is not None and nxt != self._cmd_offset:
             self._cmd_offset = nxt
             self.storage.kv_set("cmd_offset", str(nxt))
