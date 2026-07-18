@@ -133,11 +133,17 @@ chain:
   lp_lock_min_fraction: 0.5
   lp_lockers: []
 
+# Tuned off 24 alerts of live data (2026-07-19): the 60-74 "watch" band rugged
+# 42% while the quieter 45-59 band hit 36% / rugged 18% — i.e. the composite was
+# rewarding HYPE (momentum+discovery) that rugs on RH. Shifted weight toward
+# substance (safety+distribution, the winning cohort's profile) and away from
+# hype. Only reshapes the maturity/watch tier; the 🌱 early-launch path (the top
+# performer) is score-independent and unaffected. Revisit at ~50 settled alerts.
 weights:
-  safety: 0.38
-  distribution: 0.20
-  momentum: 0.25
-  discovery: 0.17
+  safety: 0.40         # was 0.38
+  distribution: 0.24   # was 0.20 — the 45-59 winners lean on clean distribution
+  momentum: 0.21       # was 0.25 — momentum spikes were a rug tell
+  discovery: 0.15      # was 0.17 — hype/boost/socials correlated with rugs
 
 active_tier: momentum
 
