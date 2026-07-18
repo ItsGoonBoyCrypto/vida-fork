@@ -153,6 +153,16 @@ class Scanner:
     async def run_forever(self) -> None:
         timeout = aiohttp.ClientTimeout(total=self.cfg.runtime.request_timeout_seconds)
         self._session = aiohttp.ClientSession(timeout=timeout)
+        tg = self.cfg.telegram
+        n_smart = len({w.lower() for w in self.cfg.smart_money_wallets}
+                      | set(self.storage.smart_wallets()))
+        log.info(
+            "telegram: %s | alert_chat=%s | commands=%s | smart_wallets=%d",
+            "TOKEN SET ✓" if tg.bot_token else "NO TOKEN ✗ (alerts go to stdout only)",
+            tg.alert_chat_id or "UNSET ✗",
+            "on" if (tg.bot_token and tg.alert_chat_id) else "OFF (needs token+chat)",
+            n_smart,
+        )
         log.info(
             "scanner up | chain=%s tier=%s dry_run=%s",
             self.cfg.chain.dexscreener_chain,
