@@ -115,6 +115,8 @@ class TokenSnapshot:
     core_alpha_wallets: list[str] = field(default_factory=list)  # proven sharps among buyers
     toxic_buyer: bool = False       # a known rug/dumper wallet is among the buyers
     curve_matched: bool = False     # matched the learned pre-migration winning setup this cycle
+    narrative: str = ""             # classified meta (dog/ai/politics/…)
+    narrative_hot: bool = False     # its narrative is currently producing winners
     launchpad: str = ""             # origin launchpad name if known (e.g. "flap")
     curve_progress_pct: Optional[float] = None   # bonding-curve fill % (pre-graduation)
 

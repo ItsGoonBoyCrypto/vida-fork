@@ -191,6 +191,19 @@ def format_cluster_html(symbol: str, token: str, labels: list[str],
     return "\n".join(lines)
 
 
+def format_kol_html(kol_name: str, symbol: str, token: str, chart_url: str = "") -> str:
+    """A tagged KOL/influencer wallet bought a token — attention incoming."""
+    from html import escape
+    lines = [
+        f"📣 <b>KOL BUY</b> — {escape(kol_name)} bought ${escape(symbol or '???')}",
+        f"CA: <code>{escape(token)}</code>",
+        "<i>An influencer wallet just aped — attention/volume often follows.</i>",
+    ]
+    if chart_url:
+        lines.append(f'<a href="{escape(chart_url)}">Chart</a>')
+    return "\n".join(lines)
+
+
 def format_top_zone_html(symbol: str, token: str, reason: str, current_mult: float,
                          chart_url: str = "") -> str:
     """Proactive learned take-profit: position entered the historical top zone."""

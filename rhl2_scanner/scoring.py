@@ -264,6 +264,11 @@ def score_discovery(t: TokenSnapshot, th: Thresholds, weight: float) -> Category
         pts -= 20.0
         cs.penalties.append("toxic wallet (rug/dumper) among buyers")
 
+    # Hot narrative — being in the current meta is a real, token-independent edge.
+    if t.narrative_hot and t.narrative:
+        pts += 12.0
+        cs.reasons.append(f"🔥 {t.narrative} meta")
+
     # Socials present
     if t.socials:
         pts += min(20.0, 7.0 * len(t.socials))

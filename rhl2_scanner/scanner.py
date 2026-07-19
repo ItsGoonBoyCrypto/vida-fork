@@ -54,6 +54,7 @@ from .walletwatch import (
     format_core_alpha_html,
     format_dump_html,
     format_exit_html,
+    format_kol_html,
     format_milestone_html,
     format_top_zone_html,
     format_whale_html,
@@ -167,6 +168,8 @@ class Scanner:
         self._mm_rep_ts: float = 0.0   # last memelab-reputation sync
         self._exit_model_cache: Optional[dict] = None   # learned top-zone model
         self._exit_model_ts: float = 0.0
+        self._hot_nar_cache: set = set()   # narratives currently producing winners
+        self._hot_nar_ts: float = 0.0
 
     # -- lifecycle -------------------------------------------------------
 
@@ -1415,6 +1418,8 @@ class Scanner:
             "toxic so tokens they buy get demoted",
             "<code>/alpha</code> — top wallets by winner-overlap (⭐ = core-alpha)",
             "<code>/deployers</code> — deployer win-rates (direct-deploy tokens)",
+            "<code>/narratives</code> — which meta is printing (hit-rate by narrative)",
+            "<code>/kol 0xWallet Name</code> — tag an influencer wallet (📣 on its buys)",
             "<code>/calibrate 0xCA1 0xCA2 …</code> — tune thresholds against your known winners",
             "<code>/autotune [run|reset]</code> — bounded auto-tuned scoring weights "
             "(view state, force a run, or revert to baseline)",
@@ -1664,6 +1669,36 @@ class Scanner:
                 lines.append(f"<code>{r['wallet'][:8]}…{r['wallet'][-4:]}</code>{tag} — "
                              f"{r['overlap']} winners, best {r['best_mult']:.0f}x{star}")
             await self._send_html("\n".join(lines))
+        elif cmd in ("narratives", "meta", "metas"):
+            from .narrative import hot_narratives, narrative_stats
+            stats = narrative_stats(self.storage.all_paper_trades())
+            settled = {k: v for k, v in stats.items() if v["n"]}
+            if not settled:
+                await self._send_html("🔥 No narrative data yet — builds as alerts settle.")
+                return
+            hot = hot_narratives(stats)
+            ranked = sorted(settled.items(), key=lambda kv: (-kv[1]["hit_rate"], -kv[1]["n"]))
+            lines = ["🔥 <b>Narratives by hit-rate</b> (settled alerts)"]
+            for nar, s in ranked[:10]:
+                star = " 🔥" if nar in hot else ""
+                lines.append(f"• <b>{nar}</b>: n={s['n']} · hit {s['hit_rate']:.0%} · "
+                             f"rug {s['rug_rate']:.0%}{star}")
+            lines.append("<i>🔥 = boosted right now. Rotates as the meta shifts.</i>")
+            await self._send_html("\n".join(lines))
+        elif cmd == "kol":
+            wallets = [p.lower() for p in parts[1:]
+                       if p.lower().startswith("0x") and len(p) == 42]
+            if not wallets:
+                await self._send_html(
+                    "Usage: <code>/kol 0xWallet Name</code> — tag an influencer/KOL "
+                    "wallet; its buys fire a 📣 alert and it counts as smart money.")
+                return
+            name = " ".join(p for p in parts[2:] if not p.lower().startswith("0x")) or "KOL"
+            w = wallets[0]
+            self._add_smart_wallet(w, source="kol", note=name)
+            await self._send_html(
+                f"📣 Tagged <code>{w}</code> as KOL <b>{__import__('html').escape(name)}</b> — "
+                "its buys now fire a dedicated alert.")
         elif cmd in ("deployers", "creators"):
             devs = self.storage._conn.execute(
                 "SELECT deployer, "
@@ -1900,6 +1935,14 @@ class Scanner:
             return
         token = ev.token_address
         self.storage.record_smart_buy(token, ev.wallet)
+
+        # KOL/influencer buy — a tagged public wallet aping in moves markets.
+        kols = self.storage.kol_wallets()
+        if ev.wallet.lower() in kols \
+                and self.storage.pos_event_new(f"{token.lower()}|kol|{ev.wallet.lower()}"):
+            await self._send_html(format_kol_html(
+                kols[ev.wallet.lower()], ev.symbol, token, ev.chart_url))
+            log.info("KOL %s bought $%s", kols[ev.wallet.lower()], ev.symbol)
 
         # Core-alpha: a single wallet proven across many winners is signal enough
         # on its own — fire a 💎 alert without waiting for a cluster (once/token).
@@ -2732,8 +2775,29 @@ class Scanner:
 
         # Quality-weight the smart buyers + flag core-alpha / toxic wallets.
         self._attach_reputation(snap)
+        # Classify the meta + flag whether it's currently hot (producing winners).
+        try:
+            from .narrative import classify
+            snap.narrative = classify(snap.symbol or "", snap.name or "")
+            snap.narrative_hot = snap.narrative in self._hot_narratives()
+        except Exception:  # noqa: BLE001
+            pass
         # Attach one-tap links for the alert (explorer + launchpad trade page).
         self._attach_links(snap)
+
+    def _hot_narratives(self) -> set:
+        """Narratives currently producing winners (cached hourly from outcomes)."""
+        now = time.time()
+        if self._hot_nar_ts and now - self._hot_nar_ts < 3600:
+            return self._hot_nar_cache
+        self._hot_nar_ts = now
+        try:
+            from .narrative import hot_narratives, narrative_stats
+            self._hot_nar_cache = hot_narratives(
+                narrative_stats(self.storage.all_paper_trades()))
+        except Exception:  # noqa: BLE001
+            self._hot_nar_cache = set()
+        return self._hot_nar_cache
 
     def _is_core_alpha(self, wallet: str) -> bool:
         """True if the wallet is on >= core_alpha_min_overlap distinct winners.

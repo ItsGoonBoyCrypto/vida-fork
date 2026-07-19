@@ -460,6 +460,12 @@ class Storage:
             "SELECT wallet, source, note, ts FROM smart_wallets ORDER BY ts DESC")
         return cur.fetchall()
 
+    def kol_wallets(self) -> dict:
+        """{wallet: label} for KOL/influencer-tagged smart wallets."""
+        cur = self._conn.execute(
+            "SELECT wallet, note FROM smart_wallets WHERE source LIKE 'kol%'")
+        return {r["wallet"]: (r["note"] or "KOL") for r in cur.fetchall()}
+
     # -- blocked scam symbols (/block) ----------------------------------
 
     def block_symbol(self, symbol: str) -> None:
