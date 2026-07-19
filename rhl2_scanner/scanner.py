@@ -1325,6 +1325,8 @@ class Scanner:
             "+ 🧬 match progress",
             "<code>/curveprobe 0xToken [fn]</code> — raw getter probe (fallback; add a fn name "
             "for a single rate-limit-proof call)",
+            "<code>/harvest 0xCA</code> — feed a winner we MISSED: harvests its early "
+            "buyers into the smart set so future similar setups score higher",
             "<code>/calibrate 0xCA1 0xCA2 …</code> — tune thresholds against your known winners",
             "<code>/autotune [run|reset]</code> — bounded auto-tuned scoring weights "
             "(view state, force a run, or revert to baseline)",
@@ -1506,6 +1508,20 @@ class Scanner:
                 await self._send_html("<pre>" + _esc(report) + "</pre>")
             except Exception as exc:
                 await self._send_html("calibrate failed: " + __import__("html").escape(str(exc)))
+        elif cmd in ("harvest", "winner", "gotcha"):
+            cas = [p.lower() for p in parts[1:] if p.lower().startswith("0x") and len(p) == 42]
+            if not cas:
+                await self._send_html(
+                    "Usage: <code>/harvest 0xCA [0xCA2 …]</code>\n"
+                    "Feed a token that pumped (that we missed) — harvests its "
+                    "earliest buyers into the smart set so future similar setups "
+                    "score higher, and shows what blocked it.")
+                return
+            for ca in cas[:5]:            # cap per message (each does explorer reads)
+                try:
+                    await self._send_html(await self._harvest_manual_winner(ca))
+                except Exception as exc:  # noqa: BLE001
+                    await self._send_html("harvest failed: " + __import__("html").escape(str(exc)))
         elif cmd in ("curveprobe", "probe"):
             if not valid_ca:
                 await self._send_html("Usage: <code>/curveprobe 0x&lt;flap token&gt;</code>")
@@ -2162,6 +2178,62 @@ class Scanner:
                                       note=f"${symbol}"):
                 added += 1
         return added
+
+    async def _harvest_manual_winner(self, ca: str) -> str:
+        """Learn from a winner the operator spotted that we never caught.
+
+        Harvests the token's earliest buyers into the smart set (so future
+        tokens THOSE wallets buy score higher + can fire 🧠 cluster alerts —
+        our strongest 'similar setup' detector), snapshots its live metrics as
+        a hand-picked exemplar, and shows whether it would alert now / what
+        blocked it (so we can see what to loosen).
+        """
+        from html import escape as _esc
+        ca = ca.lower()
+        already = self.storage.has_manual_winner(ca)
+        # Enrich + score it (reuse the calibrate path for metrics + blockers).
+        try:
+            info = await self._calibrate_one(ca)
+        except Exception as exc:  # noqa: BLE001
+            return "harvest failed to read token: " + _esc(str(exc))
+        symbol = info.get("symbol") or "?"
+        # Harvest earliest buyers into the smart-money set.
+        added = 0
+        try:
+            added = await self._harvest_buyers(ca, symbol, source_prefix="manual")
+        except Exception:  # noqa: BLE001
+            log.debug("manual harvest buyers failed", exc_info=True)
+        # Persist the exemplar (metrics snapshot) for the winners dataset.
+        try:
+            self.storage.save_manual_winner(ca, symbol, info.get("metrics") or {}, added)
+        except Exception:  # noqa: BLE001
+            log.debug("save_manual_winner failed", exc_info=True)
+
+        m = info.get("metrics") or {}
+        verdict = ("✅ would alert now" if info.get("would_alert")
+                   else "❌ still wouldn't alert")
+        blockers = (info.get("quick_fails") or []) + (info.get("safety_fails") or [])
+        cap = len(self.storage.smart_wallets())
+        lines = [
+            f"🧪 <b>Harvested winner ${_esc(symbol)}</b>"
+            + ("  <i>(already had it — refreshed)</i>" if already else ""),
+            f"<code>{_esc(ca)}</code>",
+            "",
+            f"🧠 Added <b>{added}</b> early buyer(s) → smart set (now {cap}).",
+            "Future tokens these wallets buy score higher &amp; can fire 🧠 cluster alerts.",
+            "",
+            f"<b>Setup at harvest</b> — {verdict} (score {info.get('composite', 0):.0f})",
+            _esc(f"• liq {_fmt(m.get('liquidity_usd'), '$')} · mcap "
+                 f"{_fmt(m.get('market_cap_usd'), '$')} · age {_fmt(m.get('age_minutes'), 'm')}"),
+            _esc(f"• holders {_fmt(m.get('holder_count'), '')} · top10 "
+                 f"{_fmt(m.get('top10_supply_pct'), '%')} · dev {_fmt(m.get('dev_holdings_pct'), '%')}"),
+        ]
+        if not info.get("would_alert") and blockers:
+            lines.append("")
+            lines.append("<b>What blocked it</b> (tune these to catch the next one):")
+            for b in blockers[:4]:
+                lines.append(_esc("• " + b))
+        return "\n".join(lines)
 
     async def _harvest_winners(self, dex) -> None:
         """Retroactive sweep: harvest early buyers of tokens that ran >= win_mult.

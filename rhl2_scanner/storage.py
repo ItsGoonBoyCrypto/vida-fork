@@ -150,6 +150,18 @@ CREATE TABLE IF NOT EXISTS curve_setups (
     peak_mult  REAL,
     ts         REAL NOT NULL
 );
+
+-- Manually-fed winners: tokens the operator spotted pumping that we never
+-- caught. We harvest their earliest buyers into the smart set and snapshot
+-- their live metrics here, so the "winners we learned from" dataset includes
+-- hand-picked exemplars (feed for calibration + future memelab training).
+CREATE TABLE IF NOT EXISTS manual_winners (
+    token         TEXT PRIMARY KEY, -- lowercased token address
+    symbol        TEXT,
+    metrics_json  TEXT,             -- live enrichment snapshot at harvest time
+    buyers_added  INTEGER DEFAULT 0,
+    ts            REAL NOT NULL
+);
 """
 
 
@@ -614,6 +626,36 @@ class Storage:
             "SELECT COUNT(*) AS total, COALESCE(SUM(win),0) AS wins "
             "FROM curve_setups").fetchone()
         return int(row["wins"]), int(row["total"])
+
+    # -- manually-fed winners (/harvest) --------------------------------
+
+    def save_manual_winner(self, token: str, symbol: str, metrics: dict,
+                           buyers_added: int) -> None:
+        import json
+        self._conn.execute(
+            "INSERT OR REPLACE INTO manual_winners "
+            "(token, symbol, metrics_json, buyers_added, ts) VALUES (?,?,?,?,?)",
+            (token.lower(), symbol or "", json.dumps(metrics), int(buyers_added), time.time()),
+        )
+        self._conn.commit()
+
+    def has_manual_winner(self, token: str) -> bool:
+        cur = self._conn.execute(
+            "SELECT 1 FROM manual_winners WHERE token = ?", (token.lower(),))
+        return cur.fetchone() is not None
+
+    def manual_winners(self) -> list[dict]:
+        import json
+        out = []
+        for r in self._conn.execute(
+                "SELECT * FROM manual_winners ORDER BY ts DESC").fetchall():
+            try:
+                m = json.loads(r["metrics_json"] or "{}")
+            except Exception:  # noqa: BLE001
+                m = {}
+            out.append({"token": r["token"], "symbol": r["symbol"],
+                        "metrics": m, "buyers_added": r["buyers_added"], "ts": r["ts"]})
+        return out
 
     # -- activity snapshot (/stats) -------------------------------------
 
