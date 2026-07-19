@@ -461,6 +461,11 @@ class RuntimeConfig:
     # validation). A token whose peak fell to/below this is counted a rug.
     rug_peak_mult_ceiling: float = 0.5
 
+    # Ignore Telegram commands older than this (seconds). After a redeploy,
+    # getUpdates returns the pending backlog; without this guard every restart
+    # re-runs old /harvest etc. A freshly-typed command is well under this.
+    command_max_age_seconds: int = 180
+
     # Post a "scanner online" message on startup (also serves as a wiring test).
     send_startup_message: bool = True
     # Live alerts on a chain without a tax oracle (no GoPlus coverage, no DEX

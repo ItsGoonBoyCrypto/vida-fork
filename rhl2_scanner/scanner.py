@@ -1345,11 +1345,20 @@ class Scanner:
         except Exception as exc:
             log.warning("command poll failed: %r", exc)
             return
+        max_age = self.cfg.runtime.command_max_age_seconds
+        now = time.time()
         for u in updates:
             msg = u.get("message") or u.get("channel_post") or u.get("edited_channel_post") or {}
             chat = msg.get("chat") or {}
             text = (msg.get("text") or "").strip()
             if not text.startswith("/"):
+                continue
+            # Skip stale commands: after a redeploy, getUpdates returns the pending
+            # backlog. Without this, every restart re-runs old /harvest etc. We
+            # still advance the offset past them (below) so they're not re-fetched.
+            msg_date = msg.get("date")
+            if max_age and msg_date and (now - msg_date) > max_age:
+                log.info("skipping stale command %r (%.0fs old)", text, now - msg_date)
                 continue
             chat_id = str(chat.get("id"))
             from_id = (msg.get("from") or {}).get("id")
