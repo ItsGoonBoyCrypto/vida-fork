@@ -96,6 +96,7 @@ class TestRenders(unittest.TestCase):
         self.assertIn("dog", html)                # narrative
         self.assertIn("KOL in", html)             # KOL among buyers
         self.assertIn("Contract", html)           # contract audit
+        self.assertIn("Sell check", html)         # honeypot/sellability line
         self.assertIn("Exit plan", html)          # learned exit
         self.assertIn("🚀 Trade", html)           # links
         self.assertIn("💎", html)                 # core-alpha marker

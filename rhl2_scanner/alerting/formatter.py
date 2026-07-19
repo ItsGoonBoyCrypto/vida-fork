@@ -158,6 +158,20 @@ def _exit_line(snap: TokenSnapshot) -> str:
     return f"🎚 Exit plan: {escape(snap.exit_target)}" if snap.exit_target else ""
 
 
+def _honeypot_line(snap: TokenSnapshot) -> str:
+    """Explicit sellability read — the honeypot/sell-tax status, front and centre."""
+    s = snap.safety
+    tax = s.sell_tax_pct
+    if s.is_honeypot is True:
+        return "🍯 Sell check: 🚫 <b>HONEYPOT</b> — you can't sell"
+    if tax is not None and tax >= 50 and s.is_honeypot is not False:
+        return f"🍯 Sell check: ⚠️ sell tax {tax:.0f}% — trap-like"
+    if s.is_honeypot is False:
+        extra = f" · sell tax {tax:.0f}%" if (tax is not None and tax > 1) else ""
+        return f"🍯 Sell check: ✅ Sellable{extra}"
+    return "🍯 Sell check: ⚠️ unconfirmed (no sell-sim yet)"
+
+
 def _safety_line(snap: TokenSnapshot) -> str:
     s = snap.safety
     parts = []
@@ -266,6 +280,7 @@ def format_early_launch_html(snap: TokenSnapshot, result: ScoreResult) -> str:
     if bp:
         lines.append(f"📊 {bp}")
     lines.append(f"🛡 {safety}")
+    lines.append(_honeypot_line(snap))
     contract = _contract_line(snap)
     if contract:
         lines.append(contract)
@@ -323,6 +338,7 @@ def to_telegram_html(snap: TokenSnapshot, result: ScoreResult) -> str:
     lines.append(f"{vol} · {bp}" if bp else vol)
 
     lines.append(f"🛡 {_safety_line(snap)}")
+    lines.append(_honeypot_line(snap))
     contract = _contract_line(snap)
     if contract:
         lines.append(contract)
