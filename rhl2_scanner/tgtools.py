@@ -68,14 +68,21 @@ async def send_message(token: str, chat_id: str, text: str,
 
 
 async def answer_callback(token: str, callback_id: str, text: str = "",
-                          session: Optional[aiohttp.ClientSession] = None) -> None:
-    """Ack an inline-button tap (stops the client's loading spinner)."""
+                          session: Optional[aiohttp.ClientSession] = None,
+                          show_alert: bool = False) -> None:
+    """Ack an inline-button tap (stops the client's loading spinner).
+
+    ``show_alert`` makes ``text`` pop as a modal on the tapper's screen — used to
+    surface the dry-run result immediately, without relying on a channel message.
+    """
     own = session is None
     session = session or aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
     try:
-        payload = {"callback_query_id": callback_id}
+        payload: dict = {"callback_query_id": callback_id}
         if text:
             payload["text"] = text[:200]
+        if show_alert:
+            payload["show_alert"] = True
         await _call(token, "answerCallbackQuery", payload, session, post=True)
     except Exception:  # noqa: BLE001
         pass
@@ -120,8 +127,17 @@ async def get_updates(token: str, offset: Optional[int] = None,
     own = session is None
     session = session or aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
     try:
-        # No allowed_updates => Telegram returns all types incl. channel_post.
-        params: dict = {"timeout": 0}
+        # Explicitly request callback_query so button taps are delivered — the
+        # allowed_updates setting is sticky server-side and a prior call could
+        # otherwise have narrowed it. We name every type we act on.
+        params: dict = {
+            "timeout": 0,
+            "allowed_updates": [
+                "message", "edited_message",
+                "channel_post", "edited_channel_post",
+                "callback_query",
+            ],
+        }
         if offset is not None:
             params["offset"] = offset
         data = await _call(token, "getUpdates", params, session)

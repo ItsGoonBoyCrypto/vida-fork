@@ -1392,22 +1392,33 @@ class Scanner:
             alerted = self.storage.token_alerted(token) or self._memelab_alerted(token)
             # Native USD (EVM chains) so the preview can size the buy; SOL n/a here.
             native_usd = self._eth_usd if chain != "solana" else None
+            log.info("BUY callback: %s %s amt=%s from=%s alerted=%s",
+                     chain, token, amount, from_id, alerted)
             res = preview_buy(
-                chain, token, amount, from_id, symbol="", alerted=alerted,
+                chain, token, amount, from_id, symbol="token", alerted=alerted,
                 spent_today=0.0, cfg=self._trader, native_usd=native_usd)
+            # Immediate on-screen popup so the tap always gives visible feedback,
+            # independent of the channel message.
+            if res.ok:
+                popup = (f"🧪 DRY-RUN — would buy {amount:g} {res.native} on {chain}. "
+                         "No funds moved.")
+            else:
+                popup = f"🚫 {res.reason}"
             if tg.bot_token and cb_id:
-                await answer_callback(tg.bot_token, cb_id,
-                                      "Preview sent" if res.ok else res.reason,
-                                      self._session)
-            self._reply_chat = chat_id
+                await answer_callback(tg.bot_token, cb_id, popup, self._session,
+                                      show_alert=True)
+            log.info("BUY result: ok=%s reason=%s", res.ok, res.reason)
+            # Also post the full preview to the alert chat (best-effort).
+            self._reply_chat = chat_id or tg.alert_chat_id
             try:
                 await self._send_html(res.preview if res.ok else f"🚫 {res.reason}")
             finally:
                 self._reply_chat = None
         except Exception:  # noqa: BLE001
-            log.debug("buy callback failed", exc_info=True)
+            log.exception("buy callback failed")
             if tg.bot_token and cb_id:
-                await answer_callback(tg.bot_token, cb_id, "error", self._session)
+                await answer_callback(tg.bot_token, cb_id, "error handling buy",
+                                      self._session, show_alert=True)
 
     async def _poll_commands(self) -> None:
         """Receive /zero /unzero /muted from the alert channel and act on them."""
