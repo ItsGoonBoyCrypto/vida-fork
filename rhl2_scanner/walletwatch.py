@@ -191,6 +191,21 @@ def format_cluster_html(symbol: str, token: str, labels: list[str],
     return "\n".join(lines)
 
 
+def format_top_zone_html(symbol: str, token: str, reason: str, current_mult: float,
+                         chart_url: str = "") -> str:
+    """Proactive learned take-profit: position entered the historical top zone."""
+    from html import escape
+    lines = [
+        f"⏏️ <b>TOP ZONE</b> — ${escape(symbol or '???')} now {current_mult:.2g}x",
+        escape(reason.capitalize()) + ".",
+        f"CA: <code>{escape(token)}</code>",
+        "<i>Where winners like this usually top — consider taking profit.</i>",
+    ]
+    if chart_url:
+        lines.append(f'<a href="{escape(chart_url)}">Chart</a>')
+    return "\n".join(lines)
+
+
 def format_core_alpha_html(symbol: str, token: str, label: str, overlap: int,
                            chart_url: str = "") -> str:
     """A single proven-across-many-winners wallet bought a token — strong on its own."""

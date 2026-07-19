@@ -55,6 +55,7 @@ from .walletwatch import (
     format_dump_html,
     format_exit_html,
     format_milestone_html,
+    format_top_zone_html,
     format_whale_html,
 )
 from .alerting.formatter import format_early_launch_html
@@ -164,6 +165,8 @@ class Scanner:
         self._core_alpha_cache: set = set()
         self._core_alpha_ts: float = 0.0
         self._mm_rep_ts: float = 0.0   # last memelab-reputation sync
+        self._exit_model_cache: Optional[dict] = None   # learned top-zone model
+        self._exit_model_ts: float = 0.0
 
     # -- lifecycle -------------------------------------------------------
 
@@ -1755,11 +1758,30 @@ class Scanner:
         await self._send_html(format_exit_html(ev.symbol, token, label, ev.usd, ev.chart_url))
         log.info("EXIT %s sold by %s", ev.symbol, label)
 
+    def _exit_model(self) -> Optional[dict]:
+        """Learned top-zone model (cached hourly). None until enough winners."""
+        rc = self.cfg.runtime
+        now = time.time()
+        if self._exit_model_ts and now - self._exit_model_ts < 3600:
+            return self._exit_model_cache
+        self._exit_model_ts = now
+        try:
+            from .exit_intel import learn_exit_model
+            self._exit_model_cache = learn_exit_model(
+                self.storage.all_paper_trades(),
+                win_multiple=rc.paper_digest_win_multiple,
+                min_winners=rc.exit_min_winners)
+        except Exception:  # noqa: BLE001
+            self._exit_model_cache = None
+        return self._exit_model_cache
+
     async def _monitor_positions(self, dex) -> None:
-        """After re-pricing, ping milestones (📈 Nx) and dumps (⚠️) on alerts."""
+        """After re-pricing, ping milestones (📈 Nx), dumps (⚠️), and the learned
+        top zone (⏏️) on alerted tokens."""
         rc = self.cfg.runtime
         if self.perf is None or not rc.position_monitor_enabled:
             return
+        exit_model = self._exit_model() if rc.exit_intel_enabled else None
         for row in self.storage.open_paper_trades():
             entry = row["entry_price"]
             last = row["last_price"]
@@ -1784,6 +1806,17 @@ class Scanner:
                         format_milestone_html(sym, token, m, chart, current_mult=cur),
                         reply_to=reply_to)
                     log.info("MILESTONE %s %gx", sym, m)
+            # Learned top zone (⏏️) — proactive take-profit before the full dump.
+            if exit_model is not None:
+                from .exit_intel import top_zone
+                fire, reason = top_zone(cur, peak, exit_model,
+                                        rc.exit_early_giveback_pct)
+                if fire and self.storage.pos_event_new(f"{token}|topzone"):
+                    await self._send_html(
+                        format_top_zone_html(sym, token, reason, cur, chart),
+                        reply_to=reply_to)
+                    log.info("TOP ZONE %s at %.2gx", sym, cur)
+
             # Dump guard (⚠️) — ran up then fell back hard.
             if peak >= rc.dump_min_peak_mult:
                 drawdown = (1.0 - (cur / peak)) * 100.0

@@ -380,6 +380,14 @@ class RuntimeConfig:
     # falls back by this % from its peak.
     dump_min_peak_mult: float = 1.5
     dump_drawdown_pct: float = 55.0
+    # Exit intelligence: a LEARNED take-profit. Once >= exit_min_winners alerts
+    # have settled as winners, learn the multiple where they typically topped and
+    # fire a proactive "⏏️ top zone" ping when a live position enters that range
+    # and starts to turn (a modest give-back from its own peak). Fires earlier
+    # than the dump guard. Dormant until enough winners exist.
+    exit_intel_enabled: bool = True
+    exit_min_winners: int = 8
+    exit_early_giveback_pct: float = 15.0
 
     # --- Early-launch alerts (catch runners pre/just-after graduation) ---
     # Fresh tokens have few holders + concentrated supply + little volume, so
