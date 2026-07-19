@@ -54,7 +54,7 @@ class TestClusterDetection(unittest.IsolatedAsyncioTestCase):
         cfg.runtime.smart_cluster_min_wallets = 2
         sc = Scanner(cfg)
         sc._sent = []
-        async def fake_send(html):
+        async def fake_send(html, reply_to=None):
             sc._sent.append(html)
         sc._send_html = fake_send  # type: ignore
         return sc
@@ -111,7 +111,7 @@ class TestSybilGrouping(unittest.IsolatedAsyncioTestCase):
         cfg.wallet_watch.wallet_groups = {W1.lower(): "SybilA", W2.lower(): "SybilA"}
         sc = Scanner(cfg)
         sc._sent = []
-        async def fake_send(html):
+        async def fake_send(html, reply_to=None):
             sc._sent.append(html)
         sc._send_html = fake_send  # type: ignore
         return sc

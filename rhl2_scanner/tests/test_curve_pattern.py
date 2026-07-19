@@ -93,7 +93,7 @@ class TestCurveTrackingIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_records_observation_and_labels_winner(self):
         sc = self._sc()
         sent = []
-        async def _fake_send(html):
+        async def _fake_send(html, reply_to=None):
             sent.append(html)
         sc._send_html = _fake_send  # type: ignore
         try:

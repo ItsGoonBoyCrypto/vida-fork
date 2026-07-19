@@ -18,7 +18,7 @@ class _Base(unittest.IsolatedAsyncioTestCase):
         cfg.runtime.db_path = ":memory:"
         sc = Scanner(cfg)
         sc._sent = []
-        async def fake_send(html):
+        async def fake_send(html, reply_to=None):
             sc._sent.append(html)
         sc._send_html = fake_send  # type: ignore
         return sc

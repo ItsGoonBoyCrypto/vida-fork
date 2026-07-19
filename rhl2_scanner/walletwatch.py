@@ -205,11 +205,20 @@ def format_exit_html(symbol: str, token: str, label: str, usd, chart_url: str = 
     return "\n".join(lines)
 
 
-def format_milestone_html(symbol: str, token: str, mult: float, chart_url: str = "") -> str:
+def _since_alert(current_mult: float | None) -> str:
+    """' · now 3.4x (+240%)' from the live multiple vs the alert price."""
+    if not current_mult or current_mult <= 0:
+        return ""
+    pct = (current_mult - 1.0) * 100.0
+    return f" · now {current_mult:.2g}x ({'+' if pct >= 0 else ''}{pct:.0f}%)"
+
+
+def format_milestone_html(symbol: str, token: str, mult: float, chart_url: str = "",
+                          current_mult: float | None = None) -> str:
     """An alerted token reached a multiple of its alert price."""
     from html import escape
     lines = [
-        f"📈 <b>${escape(symbol or '???')} hit {mult:g}x</b> from alert",
+        f"📈 <b>${escape(symbol or '???')} hit {mult:g}x</b> from alert{_since_alert(current_mult)}",
         f"CA: <code>{escape(token)}</code>",
     ]
     if chart_url:
@@ -218,12 +227,12 @@ def format_milestone_html(symbol: str, token: str, mult: float, chart_url: str =
 
 
 def format_dump_html(symbol: str, token: str, drawdown_pct: float, peak_mult: float,
-                     chart_url: str = "") -> str:
+                     chart_url: str = "", current_mult: float | None = None) -> str:
     """An alerted token that ran up is now falling hard — rug/dump guard."""
     from html import escape
     lines = [
         f"⚠️ <b>${escape(symbol or '???')} DUMPING</b> — −{drawdown_pct:.0f}% from peak "
-        f"(peaked {peak_mult:g}x)",
+        f"(peaked {peak_mult:g}x){_since_alert(current_mult)}",
         f"CA: <code>{escape(token)}</code>",
         "<i>Sharp drop from the high — protect any position.</i>",
     ]

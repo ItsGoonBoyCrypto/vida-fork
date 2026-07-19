@@ -197,19 +197,23 @@ class Scanner:
     def stop(self) -> None:
         self._stop.set()
 
-    async def _send_html(self, text: str) -> None:
+    async def _send_html(self, text: str, reply_to: Optional[int] = None) -> Optional[int]:
         """Send HTML to the alert channel — or, while handling a command, back to
-        whichever chat the command came from (so DM commands reply in the DM)."""
+        whichever chat the command came from (so DM commands reply in the DM).
+
+        Returns the sent message_id (for threading follow-ups), or None."""
         tg = self.cfg.telegram
         chat = self._reply_chat or tg.alert_chat_id
         if tg.bot_token and chat:
             from .tgtools import send_message
             try:
-                await send_message(tg.bot_token, chat, text, self._session)
-                return
+                ok, _detail, mid = await send_message(
+                    tg.bot_token, chat, text, self._session, reply_to=reply_to)
+                return mid if ok else None
             except Exception:
                 log.exception("send failed")
         print("\n" + text + "\n", flush=True)
+        return None
 
     async def inspect(self, ca: str) -> str:
         """Trace one token through the full live pipeline and return a report.
@@ -1594,16 +1598,28 @@ class Scanner:
             pair, token, sym = row["pair_address"], row["token_address"], row["symbol"]
             cur = last / entry
             chart = f"https://dexscreener.com/{self.cfg.chain.dexscreener_chain}/{pair}"
-            # Milestones (📈) — highest crossed only, one ping each.
+            # Thread follow-ups under the original alert (one live thread/token).
+            reply_to = None
+            mval = self.storage.kv_get("msgid:" + token.lower())
+            if mval:
+                try:
+                    reply_to = int(mval)
+                except ValueError:
+                    reply_to = None
+            # Milestones (📈) — highest crossed only, one ping each; shows live x.
             for m in sorted(rc.milestone_multiples):
                 if cur >= m and self.storage.pos_event_new(f"{token}|x{m:g}"):
-                    await self._send_html(format_milestone_html(sym, token, m, chart))
+                    await self._send_html(
+                        format_milestone_html(sym, token, m, chart, current_mult=cur),
+                        reply_to=reply_to)
                     log.info("MILESTONE %s %gx", sym, m)
             # Dump guard (⚠️) — ran up then fell back hard.
             if peak >= rc.dump_min_peak_mult:
                 drawdown = (1.0 - (cur / peak)) * 100.0
                 if drawdown >= rc.dump_drawdown_pct and self.storage.pos_event_new(f"{token}|dump"):
-                    await self._send_html(format_dump_html(sym, token, drawdown, peak, chart))
+                    await self._send_html(
+                        format_dump_html(sym, token, drawdown, peak, chart, current_mult=cur),
+                        reply_to=reply_to)
                     log.info("DUMP %s -%.0f%% from peak", sym, drawdown)
 
     def _entity_of(self, addr: str) -> str:
@@ -1659,7 +1675,7 @@ class Scanner:
         )
         try:
             from .tgtools import send_message
-            ok, detail = await send_message(tg.bot_token, tg.alert_chat_id, text, self._session)
+            ok, detail, _ = await send_message(tg.bot_token, tg.alert_chat_id, text, self._session)
             log.info("startup message: %s", detail)
         except Exception:
             log.exception("startup message failed")
@@ -1940,12 +1956,16 @@ class Scanner:
             html = format_early_launch_html(snap, result)
             if note:
                 html = note + "\n" + html
-            await self._send_html(html)
+            mid = await self._send_html(html)
             log.info("EARLY %s age=%.0fm liq=%s", snap.symbol, snap.age_minutes or 0, snap.liquidity_usd)
         else:
-            await self.notifier.send(snap, result, note=note)
+            mid = await self.notifier.send(snap, result, note=note)
             tag = "UPGRADE" if escalated else "ALERT"
             log.info("%s %s %s score=%.0f", tag, result.level.value, snap.symbol, result.composite)
+        # Remember the FIRST alert's message id so milestone/dump follow-ups can
+        # reply to it (one live thread per token).
+        if mid and prev < 0:
+            self.storage.kv_set("msgid:" + snap.token_address.lower(), str(mid))
         # A token reaching STRONG for the first time is a confirmed runner —
         # harvest its earliest buyers into the smart-money set (if enabled).
         if tier == 2 and prev < 2:
@@ -2175,3 +2195,17 @@ class Scanner:
         tmpl = (lp or {}).get("trade_url_template") if lp else ""
         if tmpl and snap.token_address:
             snap.trade_url = tmpl.replace("{token}", snap.token_address)
+        # Human labels for the active smart wallets (group name, else /smart note).
+        if snap.smart_money_wallets:
+            try:
+                groups = self.storage.wallet_groups()
+                notes = {r["wallet"]: r["note"] for r in self.storage.smart_wallets_detailed()
+                         if r["note"]}
+                labels = {}
+                for w in snap.smart_money_wallets:
+                    lab = groups.get(w.lower()) or notes.get(w.lower())
+                    if lab:
+                        labels[w.lower()] = lab
+                snap.smart_money_labels = labels
+            except Exception:  # noqa: BLE001
+                pass

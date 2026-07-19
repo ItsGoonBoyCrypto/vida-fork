@@ -39,13 +39,13 @@ class FakeSession:
 
 class TestSend(unittest.IsolatedAsyncioTestCase):
     async def test_send_ok(self):
-        ok, detail = await send_message("TOK", "-100123", "hi", session=FakeSession({"ok": True}))
+        ok, detail, _mid = await send_message("TOK", "-100123", "hi", session=FakeSession({"ok": True}))
         self.assertTrue(ok)
         self.assertEqual(detail, "sent")
 
     async def test_send_error_surfaces_description(self):
         payload = {"ok": False, "description": "chat not found"}
-        ok, detail = await send_message("TOK", "-100123", "hi", session=FakeSession(payload))
+        ok, detail, _mid = await send_message("TOK", "-100123", "hi", session=FakeSession(payload))
         self.assertFalse(ok)
         self.assertIn("chat not found", detail)
 

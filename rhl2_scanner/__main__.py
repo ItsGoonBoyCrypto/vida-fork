@@ -194,7 +194,7 @@ async def _tg(cfg: Config, command: str) -> None:
 
     chat_id = cfg.telegram.alert_chat_id
     if command == "tg-test" and chat_id:
-        ok, detail = await send_message(
+        ok, detail, _ = await send_message(
             token, chat_id,
             "✅ <b>RH L2 scanner</b> — Telegram wiring confirmed. Alerts will arrive here.",
         )

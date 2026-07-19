@@ -42,21 +42,25 @@ class TelegramNotifier:
             self._app = Application.builder().token(cfg.telegram.bot_token).build()
 
     async def send(self, snap: TokenSnapshot, result: ScoreResult,
-                   note: str = "") -> None:
+                   note: str = "", reply_to=None):
+        """Send an alert; returns the message_id (for threading follow-ups) or None."""
         prefix = (note + "\n") if note else ""
         if not self.enabled or self._app is None:
             print("\n" + (note + "\n" if note else "") + to_plain(snap, result) + "\n", flush=True)
-            return
+            return None
         try:
-            await self._app.bot.send_message(
+            msg = await self._app.bot.send_message(
                 chat_id=self.cfg.telegram.alert_chat_id,
                 text=prefix + to_telegram_html(snap, result),
                 parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True,
+                reply_to_message_id=reply_to,
             )
+            return getattr(msg, "message_id", None)
         except Exception as exc:  # network / API errors shouldn't kill the loop
             log.warning("telegram send failed: %s", exc)
             print("\n" + to_plain(snap, result) + "\n", flush=True)
+            return None
 
 
 class CommandBot:

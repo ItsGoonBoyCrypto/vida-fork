@@ -36,22 +36,28 @@ async def _call(token: str, method: str, params: Optional[dict], session: aiohtt
 
 
 async def send_message(token: str, chat_id: str, text: str,
-                       session: Optional[aiohttp.ClientSession] = None) -> tuple[bool, str]:
-    """Send a message. Returns (ok, detail). HTML parse mode, no link preview."""
+                       session: Optional[aiohttp.ClientSession] = None,
+                       reply_to: Optional[int] = None) -> tuple[bool, str, Optional[int]]:
+    """Send a message. Returns (ok, detail, message_id). HTML, no link preview.
+
+    ``reply_to`` threads this message as a reply to an earlier one (used to hang
+    milestone/dump follow-ups under the original alert).
+    """
     own = session is None
     session = session or aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
     try:
-        data = await _call(
-            token, "sendMessage",
-            {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
-             "disable_web_page_preview": True},
-            session, post=True,
-        )
+        payload: dict = {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+                         "disable_web_page_preview": True}
+        if reply_to:
+            payload["reply_parameters"] = {"message_id": reply_to,
+                                           "allow_sending_without_reply": True}
+        data = await _call(token, "sendMessage", payload, session, post=True)
         if not data:
-            return False, "no response (network/egress blocked?)"
+            return False, "no response (network/egress blocked?)", None
         if data.get("ok"):
-            return True, "sent"
-        return False, f"telegram error: {data.get('description', 'unknown')}"
+            mid = (data.get("result") or {}).get("message_id")
+            return True, "sent", mid
+        return False, f"telegram error: {data.get('description', 'unknown')}", None
     finally:
         if own:
             await session.close()

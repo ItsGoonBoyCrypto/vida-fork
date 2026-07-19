@@ -220,8 +220,9 @@ async def send_digest(cfg: Config, storage: Storage, session=None) -> tuple[bool
     chat = cfg.telegram.alert_chat_id
     if token and chat:
         from .tgtools import send_message
-        return await send_message(token, chat,
-                                  format_digest_html(rep, win, title=title, noun=noun), session)
+        ok, detail, _ = await send_message(
+            token, chat, format_digest_html(rep, win, title=title, noun=noun), session)
+        return ok, detail
     print(format_report(rep), flush=True)
     return False, "telegram not configured — printed digest to stdout"
 

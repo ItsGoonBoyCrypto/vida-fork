@@ -100,7 +100,13 @@ def _smart_line(snap: TokenSnapshot) -> str:
     n = len(snap.smart_money_wallets or [])
     if not n:
         return ""
-    heads = ", ".join(w[:6] + "…" for w in snap.smart_money_wallets[:3])
+    labels = snap.smart_money_labels or {}
+
+    def disp(w: str) -> str:
+        lab = labels.get(w.lower())
+        return f"<b>{escape(lab)}</b>" if lab else escape(w[:6] + "…")
+
+    heads = ", ".join(disp(w) for w in snap.smart_money_wallets[:3])
     more = f" +{n-3}" if n > 3 else ""
     return f"🧠 Smart money: <b>{n}</b> in ({heads}{more})"
 
