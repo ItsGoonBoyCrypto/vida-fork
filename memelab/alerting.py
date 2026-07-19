@@ -116,13 +116,15 @@ class TelegramAlerter:
     def enabled(self) -> bool:
         return bool(self.token and self.chat_id)
 
-    async def send(self, html: str) -> None:
+    async def send(self, html: str, reply_markup: dict = None) -> None:
         if not self.enabled or self._session is None:
             print("\n" + html + "\n", flush=True)
             return
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
         payload = {"chat_id": self.chat_id, "text": html, "parse_mode": "HTML",
                    "disable_web_page_preview": True}
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
         try:
             async with self._session.post(url, json=payload) as r:
                 if r.status != 200:

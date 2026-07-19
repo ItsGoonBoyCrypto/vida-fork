@@ -92,7 +92,7 @@ class TestCollectorAlertGating(unittest.IsolatedAsyncioTestCase):
 
         class _Alerter:
             enabled = True
-            async def send(self, html):
+            async def send(self, html, reply_markup=None):
                 sent.append(html)
 
         col = Collector(CollectorConfig(chains=[Chain.BASE]), s, {}, None,

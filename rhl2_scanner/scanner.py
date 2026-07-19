@@ -1339,6 +1339,25 @@ class Scanner:
                       "safety-gate or data (see blockers above)."]
         return "\n".join(lines)
 
+    def _memelab_alerted(self, token: str) -> bool:
+        """Did memelab alert this token (its chains)? Reads memelab.db read-only."""
+        import os
+        import sqlite3
+        db = os.environ.get("MEMELAB_DB", "")
+        if not db:
+            return False
+        try:
+            conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+            try:
+                row = conn.execute(
+                    "SELECT 1 FROM screen_alerts WHERE token_address = ?",
+                    (token.lower(),)).fetchone()
+            finally:
+                conn.close()
+            return row is not None
+        except Exception:  # noqa: BLE001
+            return False
+
     def _buy_keyboard(self, snap: TokenSnapshot):
         """Inline buy buttons for an alert (None unless trading is enabled)."""
         if not self._trader or not self._trader.enabled:
@@ -1368,8 +1387,9 @@ class Scanner:
             chain, token, idx = parsed
             presets = self._trader.presets_for(chain)
             amount = presets[idx] if idx < len(presets) else (presets[0] if presets else 0)
-            # Only tokens we actually alerted are buyable (allowlist rail).
-            alerted = self.storage.token_alerted(token)
+            # Only tokens we actually alerted are buyable (allowlist rail). Check
+            # both DBs — memelab alerts its chains, the scanner alerts robinhood.
+            alerted = self.storage.token_alerted(token) or self._memelab_alerted(token)
             # Native USD (EVM chains) so the preview can size the buy; SOL n/a here.
             native_usd = self._eth_usd if chain != "solana" else None
             res = preview_buy(

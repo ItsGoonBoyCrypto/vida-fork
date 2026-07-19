@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -r /app/req-scanner.txt \
 # Packages + launcher.
 COPY rhl2_scanner /app/rhl2_scanner
 COPY memelab /app/memelab
+COPY trader /app/trader
 COPY run_all.py /app/run_all.py
 
 # Shared dataset volume (attach a Railway Volume here to persist across deploys).

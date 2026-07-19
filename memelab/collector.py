@@ -76,6 +76,7 @@ class Collector:
         self.screener.reload_signature()
         self._last_relabel = 0.0
         self._last_backtest = 0.0
+        self._trader = None             # lazy TraderConfig for buy buttons
         self._last_heartbeat = 0.0
         self._last_backup = 0.0
         self._last_snap_count = None
@@ -198,8 +199,20 @@ class Collector:
             return
         from .alerting import format_screen_html
         prec = self.screener._sig.precision if self.screener._sig else None
-        await self.alerter.send(format_screen_html(scr, prec))
+        await self.alerter.send(format_screen_html(scr, prec), self._buy_keyboard(chain, token_address))
         log.info("ALERT %s $%s score=%.0f", chain.value, scr.snapshot.symbol, scr.score)
+
+    def _buy_keyboard(self, chain, token_address):
+        """Inline buy buttons for a memelab alert (None unless trading enabled).
+        The scanner (which polls the shared bot) handles the taps for all chains."""
+        try:
+            from trader.buttons import buy_keyboard
+            from trader.config import TraderConfig
+            if self._trader is None:
+                self._trader = TraderConfig.from_env()
+            return buy_keyboard(chain.value, token_address, self._trader)
+        except Exception:  # noqa: BLE001
+            return None
 
     async def _maybe_backtest(self) -> None:
         """Periodically re-derive the signature and reload it into the screener."""

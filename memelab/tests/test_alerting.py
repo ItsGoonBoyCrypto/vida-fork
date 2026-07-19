@@ -14,7 +14,7 @@ class _FakeAlerter:
     enabled = True
     def __init__(self):
         self.sent = []
-    async def send(self, html):
+    async def send(self, html, reply_markup=None):
         self.sent.append(html)
 
 
