@@ -288,14 +288,14 @@ class Collector:
             for chain, token in self.store.winner_tokens():
                 try:
                     await self.smart_money.harvest_winner(chain, token)
-                    if chain in (_Chain.BASE, _Chain.ETHEREUM):
+                    if chain in (_Chain.BASE, _Chain.ETHEREUM, _Chain.BNB):
                         await self.smart_money.label_deployer(chain, token, "winner")
                 except Exception:
                     log.debug("harvest %s failed", token, exc_info=True)
             for chain, token in self.store.rug_tokens():
                 try:
                     await self.smart_money.harvest_rug(chain, token)
-                    if chain in (_Chain.BASE, _Chain.ETHEREUM):
+                    if chain in (_Chain.BASE, _Chain.ETHEREUM, _Chain.BNB):
                         await self.smart_money.label_deployer(chain, token, "rug")
                 except Exception:
                     log.debug("rug harvest %s failed", token, exc_info=True)

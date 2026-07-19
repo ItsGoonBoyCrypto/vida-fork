@@ -153,18 +153,31 @@ class SmartMoney:
         return len(buyers)
 
     async def _creator_of(self, chain: Chain, token: str) -> str:
-        """Raw creator of an EVM token via Blockscout (empty for Solana/unknown)."""
+        """Raw creator of an EVM token via Blockscout, or Etherscan V2 fallback."""
         if not chain.is_evm or self._session is None:
             return ""
         from .chains.registry import REGISTRY
         base = (REGISTRY[chain].explorer_api_url or "").rstrip("/")
-        if not base:
+        if base:
+            b2 = base + "/v2" if base.endswith("/api") else base
+            data = await self._get(f"{b2}/addresses/{token}", None)
+            if isinstance(data, dict):
+                c = (data.get("creator_address_hash") or data.get("creator_address") or "")
+                if c:
+                    return c.lower()
+        # Etherscan V2 fallback (getcontractcreation). Needs ETHERSCAN_API_KEY.
+        import os
+        cid = REGISTRY[chain].etherscan_chain_id
+        key = os.environ.get("ETHERSCAN_API_KEY") or os.environ.get("BSCSCAN_API_KEY", "")
+        if not cid or not key:
             return ""
-        base = base + "/v2" if base.endswith("/api") else base
-        data = await self._get(f"{base}/addresses/{token}", None)
-        if not isinstance(data, dict):
-            return ""
-        return (data.get("creator_address_hash") or data.get("creator_address") or "").lower()
+        data = await self._get("https://api.etherscan.io/v2/api", {
+            "chainid": cid, "module": "contract", "action": "getcontractcreation",
+            "contractaddresses": token, "apikey": key})
+        result = (data or {}).get("result") if isinstance(data, dict) else None
+        if isinstance(result, list) and result:
+            return (result[0].get("contractCreator") or "").lower()
+        return ""
 
     async def label_deployer(self, chain: Chain, token: str, outcome: str,
                              launchpad_managers: set = None) -> None:
@@ -190,27 +203,53 @@ class SmartMoney:
     async def _evm_receivers(self, chain: Chain, token: str, newest_first: bool) -> list:
         from .chains.registry import REGISTRY
         base = (REGISTRY[chain].explorer_api_url or "").rstrip("/")
-        if not base or self._session is None:
+        if base and self._session is not None:
+            base = base + "/v2" if base.endswith("/api") else base
+            out: list = []
+            params: dict = {}
+            for _ in range(3):
+                data = await self._get(f"{base}/tokens/{token}/transfers", params)
+                items = data.get("items") if isinstance(data, dict) else None
+                if not items:
+                    break
+                for tx in items:
+                    to = tx.get("to")
+                    addr = (to.get("hash") if isinstance(to, dict) else to) or ""
+                    addr = addr.lower()
+                    if addr and addr not in _INFRA and addr not in out:
+                        out.append(addr)
+                nxt = data.get("next_page_params")
+                if not nxt or len(out) >= 200:
+                    break
+                params = nxt
+            if out:
+                return out if newest_first else list(reversed(out))
+        # Fallback: Etherscan V2 unified API (covers BSC, and ETH/Base if
+        # Blockscout was empty). Needs ETHERSCAN_API_KEY.
+        return await self._etherscan_receivers(chain, token, newest_first)
+
+    async def _etherscan_receivers(self, chain: Chain, token: str, newest_first: bool) -> list:
+        import os
+        from .chains.registry import REGISTRY
+        cid = REGISTRY[chain].etherscan_chain_id
+        key = os.environ.get("ETHERSCAN_API_KEY") or os.environ.get("BSCSCAN_API_KEY", "")
+        if not cid or not key or self._session is None:
             return []
-        base = base + "/v2" if base.endswith("/api") else base
+        params = {"chainid": cid, "module": "account", "action": "tokentx",
+                  "contractaddress": token, "page": 1, "offset": 200,
+                  "sort": "desc" if newest_first else "asc", "apikey": key}
+        data = await self._get("https://api.etherscan.io/v2/api", params)
+        result = data.get("result") if isinstance(data, dict) else None
+        if not isinstance(result, list):
+            return []
         out: list = []
-        params: dict = {}
-        for _ in range(3):
-            data = await self._get(f"{base}/tokens/{token}/transfers", params)
-            items = data.get("items") if isinstance(data, dict) else None
-            if not items:
+        for tx in result:
+            addr = (tx.get("to") or "").lower()
+            if addr and addr not in _INFRA and addr not in out:
+                out.append(addr)
+            if len(out) >= 200:
                 break
-            for tx in items:
-                to = tx.get("to")
-                addr = (to.get("hash") if isinstance(to, dict) else to) or ""
-                addr = addr.lower()
-                if addr and addr not in _INFRA and addr not in out:
-                    out.append(addr)
-            nxt = data.get("next_page_params")
-            if not nxt or len(out) >= 200:
-                break
-            params = nxt
-        return out if newest_first else list(reversed(out))
+        return out
 
     async def _solana_holders(self, mint: str) -> list:
         if self._session is None:
