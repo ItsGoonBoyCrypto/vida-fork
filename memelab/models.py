@@ -91,6 +91,7 @@ class TokenSnapshot:
     smart_money_quality: Optional[float] = None
     toxic_buyer: bool = False        # a known rug/dumper wallet is among the buyers
     core_alpha_buyer: str = ""       # a proven multi-winner wallet among the buyers (label)
+    kol_buyer: str = ""              # a tagged KOL/influencer wallet among the buyers (name)
     dex_boosted: bool = False
 
     # Social sentiment (LunarCrush; None = not covered / not fetched)

@@ -339,6 +339,17 @@ class Store:
         return [{"chain": r["chain"], "wallet": r["wallet"],
                  "source": r["source"], "ts": r["ts"]} for r in cur.fetchall()]
 
+    def kol_wallets(self, chain: Chain) -> dict:
+        """{wallet: label} for KOL/influencer-tagged wallets on a chain."""
+        cur = self._conn.execute(
+            "SELECT wallet, source FROM smart_wallets WHERE chain = ? AND source LIKE 'kol%'",
+            (chain.value,))
+        out = {}
+        for r in cur.fetchall():
+            src = r["source"] or "kol"
+            out[r["wallet"]] = src.split(":", 1)[1] if ":" in src else "KOL"
+        return out
+
     def remove_smart_wallet(self, chain: Chain, wallet: str) -> bool:
         cur = self._conn.execute(
             "DELETE FROM smart_wallets WHERE chain = ? AND wallet = ?",

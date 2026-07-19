@@ -177,6 +177,14 @@ class Collector:
                 chain, last.symbol or "?", token_address, last.core_alpha_buyer))
             log.info("CORE-ALPHA %s $%s (%s)", chain.value, last.symbol, last.core_alpha_buyer)
 
+        # KOL/influencer buy — a tagged public wallet aping moves the market.
+        if getattr(last, "kol_buyer", "") \
+                and self.store.marker_new(f"kol|{chain.value}|{token_address.lower()}"):
+            from .alerting import format_kol_html
+            await self.alerter.send(format_kol_html(
+                chain, last.kol_buyer, last.symbol or "?", token_address))
+            log.info("KOL %s bought %s $%s", last.kol_buyer, chain.value, last.symbol)
+
         if not self.screener.ready():
             return
         # Toxic demotion: a repeat-rugger among the buyers suppresses the alert.

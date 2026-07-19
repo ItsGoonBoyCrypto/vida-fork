@@ -1,0 +1,59 @@
+# KOL / influencer wallet seed list for memelab.
+#
+# Point MEMELAB_KOL_FILE at a copy of this file (or use the MEMELAB_KOL_WALLETS
+# env: "solana:<addr>:Ansem,solana:<addr>:Cobie"). Each entry is added to the
+# smart-money set tagged kol:<name> — a token these wallets buy scores higher
+# and fires a 📣 KOL BUY alert in the unified feed.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# ⚠️  ONLY add addresses you have VERIFIED. There are countless fake/impersonator
+#     "KOL wallet" lists — following a wrong one loses money. Verify each against
+#     a trustworthy attribution BEFORE adding:
+#
+#       • Arkham Intelligence "Key Opinion Leader" tag — https://intel.arkm.com
+#         THE gold standard: since Mar-2025 Arkham labels ~950 influencer wallets
+#         (100k+ followers). Query via the Arkham API + the KOL entity tag.
+#       • Nansen "Smart Money" labels — https://nansen.ai
+#       • The KOL's OWN posted wallet (a tweet/profile they control)
+#
+#   TWO TRAPS this project's research hit — avoid them:
+#     1. AI/search summaries HALLUCINATE specific base58 addresses (a fake
+#        "Ansem" address surfaced that exists in no primary source). Never paste
+#        an address a chatbot or listicle volunteers.
+#     2. Addresses ending in "pump" are the KOL's pump.fun *token contract*, NOT
+#        their trading wallet. Never seed a token address as a wallet.
+#
+#   Reality: of the famous names, only a few doxxed/ETH figures (e.g. Cobie) have
+#   rock-solid public addresses; most Solana memecoin KOLs (Hsaka, Cupsey,
+#   Waddles, Mitch) have NO reliably-attributable wallet outside Arkham, and
+#   impersonators are rampant. Wallets rotate — re-verify periodically.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Replace the <VERIFY ...> placeholders with real, sourced addresses. Entries
+# whose address still starts with "<" are skipped by the loader, so this file is
+# safe to ship as-is (it just seeds nothing until you fill it in).
+
+kols:
+  - name: Ansem
+    chain: solana
+    address: "<VERIFY on arkham: blknoiz06>"
+    note: "@blknoiz06 — verify on Arkham before enabling"
+
+  - name: Cobie
+    chain: solana
+    address: "<VERIFY on arkham>"
+    note: "verify on Arkham before enabling"
+
+  - name: Hsaka
+    chain: solana
+    address: "<VERIFY on arkham>"
+
+  - name: Cupsey
+    chain: solana
+    address: "<VERIFY on arkham>"
+
+  # Add your own verified sharp wallets too — they don't have to be famous, just
+  # early. The reputation ledger will grade them forward regardless of the label.
+  # - name: MyAlphaWallet
+  #   chain: solana
+  #   address: "So1anaBase58AddressHere"

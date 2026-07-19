@@ -112,6 +112,8 @@ class SmartMoney:
             core = self.store.core_alpha_wallets(snap.chain, self.core_alpha_min_overlap)
             hit_core = next((w for w in hits if w in core), "")
             snap.core_alpha_buyer = f"{hit_core[:8]}…{hit_core[-4:]}" if hit_core else ""
+            kols = self.store.kol_wallets(snap.chain)
+            snap.kol_buyer = next((kols[w] for w in hits if w in kols), "")
         except Exception:  # noqa: BLE001
             pass
 

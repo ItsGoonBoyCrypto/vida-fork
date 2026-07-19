@@ -42,6 +42,18 @@ def format_screen_html(scr: Screen, signature_precision: Optional[float] = None)
     return "\n".join(lines)
 
 
+def format_kol_html(chain, kol_name: str, symbol: str, token: str) -> str:
+    """A tagged KOL/influencer wallet bought a token — attention incoming."""
+    emoji = _CHAIN_EMOJI.get(chain, "•")
+    return "\n".join([
+        f"📣 <b>KOL BUY</b> — {escape(kol_name)}",
+        f"{emoji} {chain.value} · <b>${escape(symbol or '???')}</b>",
+        f"CA: <code>{escape(token)}</code>",
+        f'<a href="https://dexscreener.com/{chain.value}/{escape(token)}">Chart</a>',
+        "<i>An influencer wallet just aped — attention/volume often follows.</i>",
+    ])
+
+
 def format_core_alpha_html(chain, symbol: str, token: str, label: str) -> str:
     """A single proven multi-winner wallet bought a token — strong on its own."""
     emoji = _CHAIN_EMOJI.get(chain, "•")

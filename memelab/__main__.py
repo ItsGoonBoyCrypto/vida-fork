@@ -48,6 +48,10 @@ async def _collect(chains: list, db: str) -> None:
     from .smartmoney import SmartMoney
     from .ingest.social import SocialFeed
     smart = SmartMoney(store, session=session)
+    # Seed operator-supplied KOL/influencer wallets (Ansem, Cobie, …) as a
+    # labeled class of smart money — their buys score higher + fire 📣 alerts.
+    from .kol import seed_kols
+    seed_kols(store)
     social = SocialFeed(api_key=os.environ.get("MEMELAB_LUNARCRUSH_KEY", ""), session=session)
     # Which chains memelab ALERTS on. Default = all collected; but if the scanner
     # is also running (combined deploy), it owns robinhood — set via env there.
