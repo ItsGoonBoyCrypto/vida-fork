@@ -57,8 +57,15 @@ async def _collect(chains: list, db: str) -> None:
     # is also running (combined deploy), it owns robinhood — set via env there.
     alert_env = os.environ.get("MEMELAB_ALERT_CHAINS", "")
     alert_chains = [Chain(c.strip()) for c in alert_env.split(",") if c.strip()] if alert_env else []
-    collector = Collector(CollectorConfig(chains=chains, alert_chains=alert_chains),
-                          store, adapters, feed,
+    ccfg = CollectorConfig(chains=chains, alert_chains=alert_chains)
+    # Tunable alert floor (lower = more alerts). The screener also gates on the
+    # signature's validated precision, so this is a floor, not the only bar.
+    if v := os.environ.get("MEMELAB_MIN_ALERT_SCORE", ""):
+        try:
+            ccfg.min_alert_score = float(v)
+        except ValueError:
+            pass
+    collector = Collector(ccfg, store, adapters, feed,
                           alerter=alerter, smart_money=smart, social=social)
     logging.info("memelab collecting on %s (alerts=%s)",
                  [c.value for c in chains], "on" if alerter.enabled else "stdout")

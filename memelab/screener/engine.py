@@ -23,6 +23,12 @@ from ..models import (
 )
 
 
+# Score over the rules we can actually MEASURE — but require at least this
+# fraction of the total rule-weight to be evaluable, so a token with one lucky
+# data point can't fluke a high score.
+_COVERAGE_FLOOR = 0.35
+
+
 def _rule_holds(rule: dict, fv: FeatureVector) -> bool:
     if rule["feature"] not in fv.features:
         return False
@@ -31,17 +37,27 @@ def _rule_holds(rule: dict, fv: FeatureVector) -> bool:
 
 
 def score_vector(fv: FeatureVector, sig: Signature):
-    """Return (score_0_100, matched_rules, reasons) for a feature vector."""
+    """Return (score_0_100, matched_rules, reasons) for a feature vector.
+
+    The rule score is computed over the EVALUABLE rules only — a fresh token is
+    not penalised for time-series features (holder_velocity, liq_growth, …) that
+    physically can't exist yet, only for rules whose data is present and fails.
+    A coverage floor guards against scoring high off too little data.
+    """
     matched, reasons = [], []
     total_w = sum(r["weight"] for r in sig.rules) or 0.0
-    hit_w = 0.0
+    eval_w = hit_w = 0.0
     for r in sig.rules:
+        if r["feature"] not in fv.features:
+            continue                       # not measurable yet — skip, don't penalise
+        eval_w += r["weight"]
         if _rule_holds(r, fv):
             hit_w += r["weight"]
             matched.append(r["feature"])
             arrow = "≥" if r["op"] == ">=" else "≤"
             reasons.append(f"{r['feature']} {arrow} {r['value']:g}")
-    rule_score = (hit_w / total_w) if total_w else None
+    covered = (eval_w / total_w) if total_w else 0.0
+    rule_score = (hit_w / eval_w) if (eval_w > 0 and covered >= _COVERAGE_FLOOR) else None
     model_score = model_probability(fv, sig) if sig.model.get("weights") else None
 
     parts = [s for s in (rule_score, model_score) if s is not None]
