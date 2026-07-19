@@ -521,6 +521,49 @@ class Scanner:
             lines.append("Tip: /inspect any of these CAs to see how they score now.")
         return "\n".join(lines)
 
+    async def _contract_methods(self, token: str) -> tuple:
+        """(verified, [function names]) for a token contract via Blockscout."""
+        base = (self.cfg.chain.explorer_api_url or "").rstrip("/")
+        base = base + "/v2" if base.endswith("/api") else base
+        if not base or self._session is None:
+            return False, []
+        try:
+            async with self._session.get(f"{base}/smart-contracts/{token}") as r:
+                data = await r.json() if r.status == 200 else None
+        except Exception:  # noqa: BLE001
+            return False, []
+        if not isinstance(data, dict):
+            return False, []
+        abi = data.get("abi") or []
+        names = [e.get("name") for e in abi
+                 if isinstance(e, dict) and e.get("type") == "function" and e.get("name")]
+        verified = bool(data.get("is_verified") or abi)
+        return verified, names
+
+    async def audit_contract(self, snap_or_ca) -> str:
+        """Full contract-risk report: dangerous functions + wash-trade check."""
+        from html import escape as _esc
+        from .contract_audit import audit_functions, risk_summary, wash_trade
+        ca = snap_or_ca if isinstance(snap_or_ca, str) else snap_or_ca.token_address
+        ca = ca.lower()
+        verified, names = await self._contract_methods(ca)
+        audit = audit_functions(names)
+        # wash-trade needs live snapshot data — enrich if we were given a bare CA.
+        snap = snap_or_ca if not isinstance(snap_or_ca, str) else None
+        wash = wash_trade(snap) if snap is not None else (False, "")
+        verdict, findings = risk_summary(audit, wash)
+        lines = [f"🔍 <b>Contract audit</b> — {verdict}", f"<code>{_esc(ca)}</code>", ""]
+        if not verified:
+            lines.append("⚠️ Contract source not verified — can't fully audit.")
+        for sev, label in findings:
+            dot = {"critical": "🔴", "warning": "🟡", "info": "🔹"}.get(sev, "•")
+            lines.append(f"{dot} {_esc(label)}")
+        if not findings and verified:
+            lines.append("No mint / blacklist / pause / owner-fee hooks in the ABI.")
+        if audit.get("has_renounce"):
+            lines.append("<i>Has renounceOwnership (verify it's actually renounced).</i>")
+        return "\n".join(lines)
+
     async def _creator_of(self, token: str) -> str:
         """Raw creator (contract/EOA) of a token via Blockscout, lowercased."""
         base = (self.cfg.chain.explorer_api_url or "").rstrip("/")
@@ -1356,6 +1399,7 @@ class Scanner:
             "",
             "<b>Research &amp; tuning</b>",
             "<code>/wallet 0xWallet</code> — what tokens a wallet recently bought",
+            "<code>/audit 0xToken</code> — scan the contract for mint/blacklist/pause/fee hooks + wash-trading",
             "<code>/deployer 0xToken</code> — who created a token (finds a launchpad's manager)",
             "<code>/flapstate 0xToken</code> — live flap curve price + graduation progress "
             "(one call, Portal getTokenV2)",
@@ -1639,6 +1683,15 @@ class Scanner:
                 lines.append(f"<code>{d['deployer'][:8]}…{d['deployer'][-4:]}</code> — "
                              f"{d['wins']}W/{d['rugs']}R of {d['total']} ({wr:.0%})")
             await self._send_html("\n".join(lines))
+        elif cmd in ("audit", "contract"):
+            if not valid_ca:
+                await self._send_html("Usage: <code>/audit 0x&lt;token&gt;</code> — "
+                                      "scan the contract for mint/blacklist/pause/fee hooks")
+                return
+            try:
+                await self._send_html(await self.audit_contract(arg))
+            except Exception as exc:  # noqa: BLE001
+                await self._send_html("audit failed: " + __import__("html").escape(str(exc)))
         elif cmd in ("curveprobe", "probe"):
             if not valid_ca:
                 await self._send_html("Usage: <code>/curveprobe 0x&lt;flap token&gt;</code>")

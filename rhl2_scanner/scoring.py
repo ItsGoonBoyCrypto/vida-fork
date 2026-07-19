@@ -205,6 +205,16 @@ def score_momentum(t: TokenSnapshot, th: Thresholds, weight: float) -> CategoryS
             parts.append(25.0)
 
     cs.raw = _clamp(sum(parts) / len(parts)) if parts else 0.0
+
+    # Wash-trade demotion: heavy turnover with no holder growth is fake demand.
+    try:
+        from .contract_audit import wash_trade
+        washing, why = wash_trade(t)
+        if washing:
+            cs.raw = _clamp(cs.raw * 0.5)
+            cs.penalties.append(why)
+    except Exception:  # noqa: BLE001
+        pass
     return cs
 
 
