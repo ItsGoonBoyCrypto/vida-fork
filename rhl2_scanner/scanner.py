@@ -141,6 +141,9 @@ class Scanner:
         # Cached pre-migration curve profile (learned winning setup, else prior).
         self._curve_profile: Optional[dict] = None
         self._curve_profile_ts: Optional[float] = None
+        # Cached memelab learned signature (dormant until trained) — the score bonus.
+        self._mm_signature: Optional[dict] = None
+        self._mm_signature_ts: Optional[float] = None
         # Bags launchpad: registry discovery cursor (last-seen token count).
         self._bags_last_total: Optional[int] = None
         # Last-cycle discovery-stream health (label -> "ok: N" / "ERR: …"), for /diag.
@@ -1894,6 +1897,45 @@ class Scanner:
 
         return [r for r in results if isinstance(r, ScoreResult)]
 
+    def _active_mm_signature(self) -> Optional[dict]:
+        """memelab's learned signature (cached hourly). None until it's trained —
+        so this whole feature is dormant while memelab is cold, then auto-activates."""
+        import os
+        now = time.time()
+        if self._mm_signature_ts and now - self._mm_signature_ts < 3600:
+            return self._mm_signature
+        self._mm_signature_ts = now
+        try:
+            from .signature_bonus import load_signature
+            self._mm_signature = load_signature(os.environ.get("MEMELAB_DB", ""))
+        except Exception:  # noqa: BLE001
+            self._mm_signature = None
+        if self._mm_signature:
+            log.info("memelab signature active (trained_on=%s, precision=%s) — scoring bonus on",
+                     self._mm_signature.get("trained_on"), self._mm_signature.get("precision"))
+        return self._mm_signature
+
+    def _apply_signature_bonus(self, snap: TokenSnapshot, result: ScoreResult) -> ScoreResult:
+        """Add a composite bonus for matching memelab's learned winner-signature."""
+        if not result.safety_passed:
+            return result
+        sig = self._active_mm_signature()
+        if not sig:
+            return result
+        from dataclasses import replace
+        from .signature_bonus import signature_bonus
+        bonus = signature_bonus(snap, sig)
+        if bonus <= 0:
+            return result
+        new_comp = min(100.0, result.composite + bonus)
+        th = self.cfg.thresholds
+        lvl = (AlertLevel.STRONG if new_comp >= th.strong_alert_score
+               else AlertLevel.WATCH if new_comp >= th.watch_alert_score
+               else AlertLevel.SKIP)
+        log.info("signature bonus +%.1f on $%s (%.0f→%.0f)", bonus, snap.symbol,
+                 result.composite, new_comp)
+        return replace(result, composite=new_comp, level=lvl)
+
     async def _process(self, snap: TokenSnapshot) -> Optional[ScoreResult]:
         async with self._sem:
             await self._enrich(snap)
@@ -1903,6 +1945,9 @@ class Scanner:
         # confirmable metric, tolerant of an unconfirmed honeypot/tax.
         pragmatic = (not self.cfg.runtime.dry_run) and self.cfg.runtime.live_pragmatic_safety
         result = score_token(snap, self.cfg, strict_safety=strict, pragmatic=pragmatic)
+        # Boost tokens matching memelab's learned winner-signature (dormant until
+        # memelab is trained — see _active_mm_signature).
+        result = self._apply_signature_bonus(snap, result)
         self.storage.mark_seen(snap)
         self.storage.record_score(snap, result)
 
