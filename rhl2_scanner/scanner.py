@@ -1509,15 +1509,26 @@ class Scanner:
             except Exception as exc:
                 await self._send_html("calibrate failed: " + __import__("html").escape(str(exc)))
         elif cmd in ("harvest", "winner", "gotcha"):
-            cas = [p.lower() for p in parts[1:] if p.lower().startswith("0x") and len(p) == 42]
-            if not cas:
+            candidates = [p for p in parts[1:] if len(p) >= 32]   # plausible token ids
+            evm = [p.lower() for p in candidates
+                   if p.lower().startswith("0x") and len(p) == 42]
+            # Solana (base58, not 0x) and other non-EVM ids can't be harvested here:
+            # this scanner is Robinhood-Chain-only. Flag them instead of dropping.
+            nonevm = [p for p in candidates
+                      if not (p.lower().startswith("0x") and len(p) == 42)]
+            if not evm and not nonevm:
                 await self._send_html(
                     "Usage: <code>/harvest 0xCA [0xCA2 …]</code>\n"
-                    "Feed a token that pumped (that we missed) — harvests its "
-                    "earliest buyers into the smart set so future similar setups "
-                    "score higher, and shows what blocked it.")
+                    "Feed a Robinhood-Chain token that pumped (that we missed) — "
+                    "harvests its earliest buyers into the smart set so future "
+                    "similar setups score higher, and shows what blocked it.")
                 return
-            for ca in cas[:5]:            # cap per message (each does explorer reads)
+            if nonevm:
+                await self._send_html(
+                    f"⚠️ Skipped {len(nonevm)} non-Robinhood token(s). This scanner "
+                    "is <b>Robinhood-Chain only</b> — Solana &amp; Base winners belong "
+                    "in <b>memelab</b> (the multi-chain half), not here.")
+            for ca in evm[:5]:            # cap per message (each does explorer reads)
                 try:
                     await self._send_html(await self._harvest_manual_winner(ca))
                 except Exception as exc:  # noqa: BLE001
@@ -1590,6 +1601,12 @@ class Scanner:
                 tag = f" · {r['note']}" if r["note"] else ""
                 lines.append(f"<code>{r['wallet']}</code> ({src}{tag})")
             await self._send_html("\n".join(lines))
+        else:
+            # Never leave a /command in silence — that reads as "the bot is dead".
+            from html import escape as _esc
+            await self._send_html(
+                f"❓ Unknown command <code>/{_esc(cmd)}</code>. "
+                "Send <code>/help</code> for the full list.")
 
     async def _poll_wallets(self) -> None:
         if not self.cfg.wallet_watch.enabled or not self.cfg.wallet_watch.wallets:
@@ -2197,30 +2214,51 @@ class Scanner:
         except Exception as exc:  # noqa: BLE001
             return "harvest failed to read token: " + _esc(str(exc))
         symbol = info.get("symbol") or "?"
-        # Harvest earliest buyers into the smart-money set.
+        m = info.get("metrics") or {}
+        # Not on Robinhood Chain → almost certainly a Base/Sol token pasted here.
+        # Don't pretend to harvest; point it at memelab.
+        if not info.get("found"):
+            return ("🔎 Couldn't find <code>" + _esc(ca) + "</code> on Robinhood "
+                    "Chain.\nIf it's a <b>Base or Solana</b> token, it belongs in "
+                    "<b>memelab</b> (the multi-chain half) — this scanner only reads RH.")
+
+        # Bundle guard: harvesting 'early buyers' from a heavily-bundled launch
+        # would inject sybil/bundle wallets into the smart set (poisoning cluster
+        # signals). Record the exemplar, but SKIP the wallet harvest.
+        bundle = m.get("bundle_supply_pct")
+        bundle_cap = self.cfg.runtime.harvest_max_bundle_pct
+        bundled_out = bundle is not None and bundle > bundle_cap
+
         added = 0
-        try:
-            added = await self._harvest_buyers(ca, symbol, source_prefix="manual")
-        except Exception:  # noqa: BLE001
-            log.debug("manual harvest buyers failed", exc_info=True)
+        if not bundled_out:
+            try:
+                added = await self._harvest_buyers(ca, symbol, source_prefix="manual")
+            except Exception:  # noqa: BLE001
+                log.debug("manual harvest buyers failed", exc_info=True)
         # Persist the exemplar (metrics snapshot) for the winners dataset.
         try:
-            self.storage.save_manual_winner(ca, symbol, info.get("metrics") or {}, added)
+            self.storage.save_manual_winner(ca, symbol, m, added)
         except Exception:  # noqa: BLE001
             log.debug("save_manual_winner failed", exc_info=True)
 
-        m = info.get("metrics") or {}
         verdict = ("✅ would alert now" if info.get("would_alert")
                    else "❌ still wouldn't alert")
         blockers = (info.get("quick_fails") or []) + (info.get("safety_fails") or [])
         cap = len(self.storage.smart_wallets())
+        if bundled_out:
+            harvest_line = (f"⚠️ <b>Skipped buyer harvest</b> — {bundle:.0f}% bundled "
+                            f"(&gt; {bundle_cap:.0f}%). Those 'early buyers' are likely "
+                            "sybils; adding them would poison cluster alerts.")
+        else:
+            harvest_line = (f"🧠 Added <b>{added}</b> early buyer(s) → smart set "
+                            f"(now {cap}).\nFuture tokens these wallets buy score "
+                            "higher &amp; can fire 🧠 cluster alerts.")
         lines = [
             f"🧪 <b>Harvested winner ${_esc(symbol)}</b>"
             + ("  <i>(already had it — refreshed)</i>" if already else ""),
             f"<code>{_esc(ca)}</code>",
             "",
-            f"🧠 Added <b>{added}</b> early buyer(s) → smart set (now {cap}).",
-            "Future tokens these wallets buy score higher &amp; can fire 🧠 cluster alerts.",
+            harvest_line,
             "",
             f"<b>Setup at harvest</b> — {verdict} (score {info.get('composite', 0):.0f})",
             _esc(f"• liq {_fmt(m.get('liquidity_usd'), '$')} · mcap "

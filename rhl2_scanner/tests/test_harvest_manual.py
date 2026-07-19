@@ -102,6 +102,61 @@ class TestManualHarvest(unittest.IsolatedAsyncioTestCase):
         finally:
             sc.storage.close()
 
+    async def test_solana_ca_flagged_not_dropped(self):
+        sc = _sc()
+        sent = []
+
+        async def fake_send(html, reply_to=None):
+            sent.append(html)
+        sc._send_html = fake_send             # type: ignore
+        try:
+            # a base58 Solana mint — not 0x; must be flagged, not silently ignored
+            await sc._handle_command("/harvest 7EYnhQoR9YM3N7UoaKRoA44Uy8JeaZV3qyouov87awMs")
+            self.assertTrue(any("memelab" in h for h in sent), sent)
+            self.assertTrue(any("non-Robinhood" in h for h in sent), sent)
+        finally:
+            sc.storage.close()
+
+    async def test_not_found_on_rh_points_to_memelab(self):
+        sc = _sc()
+
+        async def fake_one(ca):
+            info = _fake_info(ca)
+            info["found"] = False           # e.g. a Base token, not on RH DexScreener
+            return info
+        sc._calibrate_one = fake_one          # type: ignore
+        try:
+            html = await sc._harvest_manual_winner("0x" + "d" * 40)
+            self.assertIn("memelab", html)
+            self.assertIn("Couldn't find", html)
+            self.assertFalse(sc.storage.has_manual_winner("0x" + "d" * 40))
+        finally:
+            sc.storage.close()
+
+    async def test_bundled_winner_skips_buyer_harvest(self):
+        sc = _sc()
+        harvested = {"called": False}
+
+        async def fake_one(ca):
+            info = _fake_info(ca)
+            info["metrics"]["bundle_supply_pct"] = 71.2   # heavily bundled (like $FLETCH)
+            return info
+
+        async def fake_buyers(token, symbol, source_prefix):
+            harvested["called"] = True
+            return 9
+        sc._calibrate_one = fake_one          # type: ignore
+        sc._harvest_buyers = fake_buyers      # type: ignore
+        try:
+            html = await sc._harvest_manual_winner(_CA)
+            self.assertIn("Skipped buyer harvest", html)
+            self.assertFalse(harvested["called"])          # never harvested sybils
+            # exemplar still recorded, with 0 buyers added
+            self.assertTrue(sc.storage.has_manual_winner(_CA))
+            self.assertEqual(sc.storage.manual_winners()[0]["buyers_added"], 0)
+        finally:
+            sc.storage.close()
+
 
 if __name__ == "__main__":
     unittest.main()

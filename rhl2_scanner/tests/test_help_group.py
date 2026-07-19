@@ -45,6 +45,17 @@ class TestHelp(_Base):
         finally:
             sc.storage.close()
 
+    async def test_unknown_command_replies(self):
+        # An unrecognised /command must NOT be silent (reads as "bot is dead").
+        sc = self._sc()
+        try:
+            await sc._handle_command("/definitelynotacommand")
+            self.assertEqual(len(sc._sent), 1)
+            self.assertIn("Unknown command", sc._sent[0])
+            self.assertIn("/help", sc._sent[0])
+        finally:
+            sc.storage.close()
+
 
 class TestGroupCommand(_Base):
     async def test_group_and_entity(self):

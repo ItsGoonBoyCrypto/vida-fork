@@ -429,6 +429,11 @@ class RuntimeConfig:
     autotune_max_drift: float = 0.08           # a weight can never leave baseline ± this
     autotune_interval_hours: float = 24.0      # how often to re-tune
 
+    # /harvest bundle guard: skip harvesting 'early buyers' from a manually-fed
+    # winner whose launch was bundled above this % of supply — those wallets are
+    # likely sybils and would poison the smart-money cluster signal.
+    harvest_max_bundle_pct: float = 50.0
+
     # Post a "scanner online" message on startup (also serves as a wiring test).
     send_startup_message: bool = True
     # Live alerts on a chain without a tax oracle (no GoPlus coverage, no DEX
