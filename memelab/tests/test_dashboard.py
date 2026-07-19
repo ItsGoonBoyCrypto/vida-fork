@@ -55,6 +55,26 @@ class TestDashboardAsset(unittest.TestCase):
         self.assertIn("j('screen", html)          # same-origin (relative) fetch
         self.assertIn("j('stats')", html)
 
+    def test_dashboard_has_harvest_ui(self):
+        here = os.path.join(os.path.dirname(__file__), "..", "api", "dashboard.html")
+        with open(here, encoding="utf-8") as fh:
+            html = fh.read()
+        self.assertIn("Harvest a winner", html)
+        self.assertIn("harvestWinner", html)
+        self.assertIn("fetch('harvest'", html)     # posts to the /harvest endpoint
+
+
+class TestApiRoutes(unittest.TestCase):
+    def test_harvest_route_registered(self):
+        try:
+            from memelab.api.app import create_app
+        except Exception as exc:  # pragma: no cover - fastapi always present in CI
+            self.skipTest(f"fastapi unavailable: {exc}")
+        app = create_app(":memory:")
+        paths = {getattr(r, "path", None) for r in app.routes}
+        self.assertIn("/harvest", paths)
+        self.assertIn("/smart-wallets", paths)
+
 
 if __name__ == "__main__":
     unittest.main()

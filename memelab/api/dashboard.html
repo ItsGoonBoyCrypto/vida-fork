@@ -92,6 +92,23 @@
     </table></div>
   </div>
 
+  <p class="eyebrow toggle" id="h-toggle">▸ Harvest a winner <span class="muted" style="text-transform:none;letter-spacing:0">— feed a token that pumped</span></p>
+  <div class="card" id="h-card" hidden>
+    <div class="addrow">
+      <input id="h-addr" placeholder="token address (0x… or Solana mint)" autocomplete="off" spellcheck="false">
+      <select id="h-chain">
+        <option value="solana">solana</option>
+        <option value="base">base</option>
+        <option value="ethereum">ethereum</option>
+        <option value="robinhood">robinhood</option>
+      </select>
+      <input id="h-key" placeholder="admin key" autocomplete="off" style="display:none">
+      <button id="h-add">Harvest</button>
+    </div>
+    <p class="reasons" style="margin:.5rem 0 0">Harvests the token's earliest buyers into that chain's smart-money set — so future tokens those wallets buy score higher. Post-pump price metrics are recorded but not used for training.</p>
+    <div id="h-msg" class="reasons" style="margin:.5rem 0 0;min-height:1em"></div>
+  </div>
+
   <p class="eyebrow">Active signature</p>
   <div class="card" id="sig"><span class="empty">loading…</span></div>
 
@@ -148,6 +165,35 @@ document.getElementById('w-add').onclick=()=>{
   mutateWallet(a.value.trim(), c.value, false); a.value='';
 };
 document.getElementById('w-addr').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('w-add').click(); });
+
+// Harvest-a-winner card (collapsible, default collapsed).
+function setHarvestOpen(open){
+  document.getElementById('h-card').hidden = !open;
+  document.getElementById('h-toggle').firstChild.nodeValue = (open?'▾':'▸') + ' Harvest a winner ';
+  try{ localStorage.setItem('h-open', open?'1':'0'); }catch(e){}
+}
+document.getElementById('h-toggle').onclick=()=>setHarvestOpen(document.getElementById('h-card').hidden);
+setHarvestOpen((()=>{ try{ return localStorage.getItem('h-open')==='1'; }catch(e){ return false; } })());
+
+async function harvestWinner(){
+  const a=document.getElementById('h-addr'), c=document.getElementById('h-chain'), msg=document.getElementById('h-msg');
+  const token=a.value.trim(); if(!token){return;}
+  const key=(document.getElementById('h-key')||{}).value ? document.getElementById('h-key').value.trim() : '';
+  msg.style.color='var(--muted)'; msg.textContent='harvesting…';
+  let d=null;
+  try{ const r=await fetch('harvest',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({token, chain:c.value, key})}); d = r.ok?await r.json():null; }catch(e){}
+  if(!d || !d.ok){ msg.style.color='var(--signal)'; msg.textContent=(d&&d.error)||'failed'; return; }
+  msg.style.color='var(--accent)';
+  if(d.bundled_out){ msg.textContent = `⚠️ $${d.symbol}: ${d.bundle_pct?.toFixed(0)}% bundled — skipped buyer harvest (likely sybils). Exemplar recorded.`; }
+  else if(!d.found){ msg.textContent = `🔎 Couldn't find that token on ${d.chain} via DexScreener — check the address/chain.`; }
+  else { msg.textContent = `🧠 $${d.symbol}: added ${d.added} early buyer(s) → ${d.chain} smart set (now ${d.smart_count}).`; a.value=''; loadWallets(); }
+}
+document.getElementById('h-add').onclick=harvestWinner;
+document.getElementById('h-addr').addEventListener('keydown',e=>{ if(e.key==='Enter') harvestWinner(); });
+
+// Reveal the admin-key inputs together when the API is locked.
+(async()=>{ const d=await j('smart-wallets'); if(d&&d.locked){ const k=document.getElementById('h-key'); if(k) k.style.display=''; } })();
 
 async function refresh(){
   const stats = await j('stats');

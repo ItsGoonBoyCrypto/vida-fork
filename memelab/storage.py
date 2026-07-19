@@ -69,6 +69,15 @@ CREATE TABLE IF NOT EXISTS harvested (
     ts      REAL NOT NULL,
     PRIMARY KEY (chain, token)
 );
+CREATE TABLE IF NOT EXISTS manual_winners (
+    chain         TEXT NOT NULL,
+    token         TEXT NOT NULL,       -- lowercased; a winner the operator fed in
+    symbol        TEXT,
+    metrics_json  TEXT,                -- enrichment snapshot at harvest time
+    buyers_added  INTEGER DEFAULT 0,
+    ts            REAL NOT NULL,
+    PRIMARY KEY (chain, token)
+);
 """
 
 
@@ -295,6 +304,37 @@ class Store:
                            (chain.value, token.lower(), time.time()))
         self._conn.commit()
         return True
+
+    # -- manually-fed winners (harvest) ---------------------------------
+
+    def save_manual_winner(self, chain: Chain, token: str, symbol: str,
+                           metrics: dict, buyers_added: int) -> None:
+        import json
+        self._conn.execute(
+            "INSERT OR REPLACE INTO manual_winners "
+            "(chain, token, symbol, metrics_json, buyers_added, ts) VALUES (?,?,?,?,?,?)",
+            (chain.value, token.lower(), symbol or "", json.dumps(metrics),
+             int(buyers_added), time.time()))
+        self._conn.commit()
+
+    def has_manual_winner(self, chain: Chain, token: str) -> bool:
+        cur = self._conn.execute(
+            "SELECT 1 FROM manual_winners WHERE chain = ? AND token = ?",
+            (chain.value, token.lower()))
+        return cur.fetchone() is not None
+
+    def manual_winners(self) -> list:
+        import json
+        out = []
+        for r in self._conn.execute(
+                "SELECT * FROM manual_winners ORDER BY ts DESC").fetchall():
+            try:
+                m = json.loads(r["metrics_json"] or "{}")
+            except Exception:  # noqa: BLE001
+                m = {}
+            out.append({"chain": r["chain"], "token": r["token"], "symbol": r["symbol"],
+                        "metrics": m, "buyers_added": r["buyers_added"], "ts": r["ts"]})
+        return out
 
     # -- coverage stats -------------------------------------------------
 

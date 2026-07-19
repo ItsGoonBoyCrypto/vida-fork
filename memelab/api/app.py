@@ -94,6 +94,28 @@ def create_app(db: str = "memelab.db"):
         added = store.add_smart_wallet(chain, wallet, source="dashboard")
         return {"ok": True, "added": added, "count": store.smart_wallet_count()}
 
+    @api.post("/harvest")
+    async def harvest(payload: dict = Body(default={}),
+                      x_admin_key: str = Header(default="")):
+        """Feed a confirmed winner: harvest its earliest buyers into the smart set
+        (the sound, chain-correct signal) and record it as an exemplar."""
+        key = os.environ.get("MEMELAB_ADMIN_KEY", "")
+        if key and (x_admin_key or payload.get("key")) != key:
+            return {"ok": False, "error": "unauthorized"}
+        chain_s = str(payload.get("chain") or "").strip().lower()
+        token = str(payload.get("token") or payload.get("address") or "").strip()
+        try:
+            chain = Chain(chain_s)
+        except ValueError:
+            return {"ok": False, "error": f"unknown chain '{chain_s}'"}
+        if not token or len(token) < 32:
+            return {"ok": False, "error": "invalid token address"}
+        import aiohttp
+        from ..harvest import harvest_manual_winner
+        timeout = aiohttp.ClientTimeout(total=20)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            return await harvest_manual_winner(store, chain, token, session)
+
     @api.get("/winners")
     def winners(chain: str | None = Query(default=None), min_mult: float = 3.0):
         ch = Chain(chain) if chain else None

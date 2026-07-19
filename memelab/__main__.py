@@ -4,6 +4,7 @@
     python -m memelab collect --chains solana,base
     python -m memelab backtest               # derive + validate a signature now
     python -m memelab screen 0x<token> --chain base   # score one live token
+    python -m memelab harvest <token> --chain solana  # feed a winner we missed
     python -m memelab stats                  # dataset coverage
 
 The collector is the piece to leave running — it accumulates the dataset the
@@ -52,6 +53,29 @@ async def _collect(chains: list, db: str) -> None:
                  [c.value for c in chains], "on" if alerter.enabled else "stdout")
     try:
         await collector.run_forever()
+    finally:
+        await session.close()
+        store.close()
+
+
+async def _harvest(chain: Chain, token: str, db: str) -> None:
+    import aiohttp
+    from .harvest import harvest_manual_winner
+
+    store = Store(db)
+    session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20))
+    try:
+        r = await harvest_manual_winner(store, chain, token, session)
+        sym = r.get("symbol") or "?"
+        if r.get("bundled_out"):
+            print(f"${sym} on {chain.value}: {r.get('bundle_pct'):.0f}% bundled — "
+                  "skipped buyer harvest (likely sybils). Exemplar recorded.")
+        elif not r.get("found"):
+            print(f"couldn't find {token} on {chain.value} via DexScreener — "
+                  "check the address/chain.")
+        else:
+            print(f"${sym} on {chain.value}: added {r['added']} early buyer(s) → "
+                  f"smart set (now {r['smart_count']}).")
     finally:
         await session.close()
         store.close()
@@ -140,8 +164,9 @@ def _stats(db: str) -> None:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="memelab")
-    p.add_argument("command", choices=["collect", "backtest", "screen", "stats", "export"])
-    p.add_argument("token", nargs="?", help="token address for `screen`")
+    p.add_argument("command",
+                   choices=["collect", "backtest", "screen", "stats", "export", "harvest"])
+    p.add_argument("token", nargs="?", help="token address for `screen` / `harvest`")
     p.add_argument("--chains", default="", help="comma list; default all")
     p.add_argument("--chain", default="base", help="chain for `screen`")
     p.add_argument("--db", default="memelab.db")
@@ -158,6 +183,10 @@ def main(argv=None) -> int:
         if not a.token:
             print("screen requires a token address"); return 2
         asyncio.run(_screen(Chain(a.chain), a.token, a.db))
+    elif a.command == "harvest":
+        if not a.token:
+            print("harvest requires a token address"); return 2
+        asyncio.run(_harvest(Chain(a.chain), a.token, a.db))
     elif a.command == "stats":
         _stats(a.db)
     elif a.command == "export":
