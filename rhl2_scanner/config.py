@@ -405,6 +405,14 @@ class RuntimeConfig:
     # Fresh tokens have few holders + concentrated supply + little volume, so
     # they can't reach the maturity-based score. This path alerts on a SAFE,
     # brand-new launch regardless of that score — the "get in early" signal.
+    # Quality floors — cut low-score noise. Maturity (watch/strong) alerts need
+    # composite >= min_alert_score; fresh early-launch alerts need conviction >=
+    # early_launch_min_conviction (composite is structurally low for new tokens).
+    # Signal-bypass alerts (core-alpha/cluster/KOL/honeypot) are exempt. Bump
+    # min_alert_score to 60 for even fewer, higher-conviction alerts.
+    min_alert_score: float = 55.0
+    early_launch_min_conviction: float = 45.0
+
     early_launch_enabled: bool = True
     early_launch_max_age_minutes: float = 60      # only tokens this new
     early_launch_min_liquidity_usd: float = 3000  # confirm a real (graduated) pool

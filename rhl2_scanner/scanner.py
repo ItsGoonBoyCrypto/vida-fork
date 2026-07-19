@@ -2503,6 +2503,17 @@ class Scanner:
             return result
 
         rc = self.cfg.runtime
+
+        # Quality floor — cut low-score noise. Maturity alerts (watch/strong)
+        # gate on composite; fresh early-launch gates on CONVICTION instead, since
+        # a brand-new token's composite is structurally low (few holders/volume)
+        # yet real gems still show confluence. Signal-bypass alerts (core-alpha,
+        # cluster, KOL, honeypot) are score-independent and handled elsewhere.
+        if tier in (1, 2) and result.composite < rc.min_alert_score:
+            log.debug("floor: %s composite %.0f < %.0f", snap.symbol,
+                      result.composite, rc.min_alert_score)
+            return result
+
         prev = self.storage.alert_rank(snap.pair_address)
         escalated = rc.realert_on_escalation and prev >= 0 and tier > prev
         cooling = self.storage.in_cooldown(snap.pair_address, rc.realert_cooldown_seconds)
@@ -2514,6 +2525,12 @@ class Scanner:
         # Fuse EVERY signal into this one alert (conviction, exit plan, KOL,
         # contract audit) — attached to the snapshot for the formatter.
         await self._attach_alert_intel(snap, result)
+
+        # Early-launch conviction floor (composite can't gate fresh tokens fairly).
+        if tier == 0 and (snap.conviction or 0.0) < rc.early_launch_min_conviction:
+            log.debug("floor: early %s conviction %.0f < %.0f", snap.symbol,
+                      snap.conviction or 0.0, rc.early_launch_min_conviction)
+            return result
 
         note = self._escalation_note(prev, tier) if escalated else ""
         if tier == 0:
