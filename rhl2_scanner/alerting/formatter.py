@@ -84,8 +84,7 @@ def _buy_pressure(snap: TokenSnapshot) -> str:
     if b is None or s is None or (b + s) == 0:
         return ""
     ratio = b / (b + s)
-    dot = "🟢" if ratio >= 0.65 else "🟡" if ratio >= 0.5 else "🔴"
-    return f"Buys {win}: {b}·{s} {dot} {ratio*100:.0f}%"
+    return f"Buys {win}: {b}·{s} {ratio*100:.0f}%"
 
 
 def _links_row(snap: TokenSnapshot) -> str:
@@ -129,8 +128,7 @@ def _conviction_line(snap: TokenSnapshot) -> str:
     """The headline confluence read + its top contributing factors."""
     if snap.conviction is None:
         return ""
-    dot = "🟢" if snap.conviction >= 70 else "🟡" if snap.conviction >= 45 else "🔴"
-    line = f"🎯 <b>Conviction {snap.conviction:.0f}/100</b> {dot} {_bar(snap.conviction)}"
+    line = f"🎯 <b>Conviction {snap.conviction:.0f}/100</b> {_bar(snap.conviction)}"
     factors = [f for f in (snap.conviction_factors or []) if f[0] != "base" and f[1]]
     factors.sort(key=lambda f: -abs(f[1]))
     if factors:

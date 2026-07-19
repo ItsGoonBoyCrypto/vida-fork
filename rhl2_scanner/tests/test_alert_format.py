@@ -33,9 +33,12 @@ class TestHelpers(unittest.TestCase):
         self.assertEqual(_bar(60).count("▰"), 6)
         self.assertEqual(_bar(None), "")
 
-    def test_buy_pressure_dot(self):
-        self.assertIn("🟢", _buy_pressure(_snap(buys_5m=90, sells_5m=10)))
-        self.assertIn("🔴", _buy_pressure(_snap(buys_5m=10, sells_5m=90)))
+    def test_buy_pressure(self):
+        # No colored dot (chain badge is the only circle now) — just the ratio.
+        line = _buy_pressure(_snap(buys_5m=90, sells_5m=10))
+        self.assertIn("90%", line)
+        self.assertNotIn("🟢", line)
+        self.assertNotIn("🟡", line)
         self.assertEqual(_buy_pressure(_snap(buys_5m=None, sells_5m=None,
                                              buys_1h=None, sells_1h=None)), "")
 
