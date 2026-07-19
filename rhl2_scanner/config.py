@@ -388,6 +388,9 @@ class RuntimeConfig:
     exit_intel_enabled: bool = True
     exit_min_winners: int = 8
     exit_early_giveback_pct: float = 15.0
+    # Run a contract audit (mint/blacklist/pause/fee hooks) at alert time and fold
+    # the verdict into the alert. One extra explorer call per alert (infrequent).
+    contract_audit_on_alert: bool = True
 
     # --- Early-launch alerts (catch runners pre/just-after graduation) ---
     # Fresh tokens have few holders + concentrated supply + little volume, so

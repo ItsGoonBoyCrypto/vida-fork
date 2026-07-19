@@ -78,6 +78,28 @@ class TestRenders(unittest.TestCase):
         self.assertIn("▰", html)          # curve bar
         self.assertIn("🔍 Scan", html)    # explorer link
 
+    def test_consolidated_alert_has_all_intel(self):
+        # Everything the system knows must land in ONE alert.
+        s = _snap(launchpad="flap", smart_money_wallets=["0xaaaa1111"],
+                  core_alpha_wallets=["0xaaaa1111"], narrative="dog",
+                  narrative_hot=True, kol_labels=["Ansem"])
+        s.smart_money_labels = {"0xaaaa1111": "Ansem"}
+        s.conviction = 82.0
+        s.conviction_factors = [("base", 35.0), ("core-alpha", 18.0), ("memelab sig", 15.0)]
+        s.contract_risk = "🟢 no contract red flags found"
+        s.exit_target = "TP ~4x–7x · trail −55%"
+        s.trade_url = "https://flap.sh/0xtoken"
+        r = score_token(s, Config(), strict_safety=False, pragmatic=True)
+        html = to_telegram_html(s, r)
+        self.assertIn("Conviction 82", html)      # conviction headline
+        self.assertIn("core-alpha", html)         # factor + smart tag
+        self.assertIn("dog", html)                # narrative
+        self.assertIn("KOL in", html)             # KOL among buyers
+        self.assertIn("Contract", html)           # contract audit
+        self.assertIn("Exit plan", html)          # learned exit
+        self.assertIn("🚀 Trade", html)           # links
+        self.assertIn("💎", html)                 # core-alpha marker
+
 
 if __name__ == "__main__":
     unittest.main()

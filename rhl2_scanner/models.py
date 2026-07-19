@@ -117,6 +117,13 @@ class TokenSnapshot:
     curve_matched: bool = False     # matched the learned pre-migration winning setup this cycle
     narrative: str = ""             # classified meta (dog/ai/politics/…)
     narrative_hot: bool = False     # its narrative is currently producing winners
+    # Consolidated alert intelligence (computed at alert time, rendered in one msg).
+    conviction: Optional[float] = None       # 0-100 confluence score
+    conviction_factors: list = field(default_factory=list)   # [(label, pts)]
+    contract_risk: str = ""         # 🟢/🟡/🔴 verdict from the contract audit
+    contract_findings: list = field(default_factory=list)    # [(sev, label)]
+    exit_target: str = ""           # learned take-profit hint, e.g. "~4x–7x"
+    kol_labels: list = field(default_factory=list)           # KOL names among buyers
     launchpad: str = ""             # origin launchpad name if known (e.g. "flap")
     curve_progress_pct: Optional[float] = None   # bonding-curve fill % (pre-graduation)
 

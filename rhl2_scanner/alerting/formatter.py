@@ -108,7 +108,54 @@ def _smart_line(snap: TokenSnapshot) -> str:
 
     heads = ", ".join(disp(w) for w in snap.smart_money_wallets[:3])
     more = f" +{n-3}" if n > 3 else ""
-    return f"🧠 Smart money: <b>{n}</b> in ({heads}{more})"
+    tag = ""
+    if snap.core_alpha_wallets:
+        tag = f" · 💎{len(snap.core_alpha_wallets)} core-alpha"
+    return f"🧠 Smart money: <b>{n}</b> in ({heads}{more}){tag}"
+
+
+def _conviction_line(snap: TokenSnapshot) -> str:
+    """The headline confluence read + its top contributing factors."""
+    if snap.conviction is None:
+        return ""
+    dot = "🟢" if snap.conviction >= 70 else "🟡" if snap.conviction >= 45 else "🔴"
+    line = f"🎯 <b>Conviction {snap.conviction:.0f}/100</b> {dot} {_bar(snap.conviction)}"
+    factors = [f for f in (snap.conviction_factors or []) if f[0] != "base" and f[1]]
+    factors.sort(key=lambda f: -abs(f[1]))
+    if factors:
+        line += "\n   " + " · ".join(f"{escape(str(lbl))} {pts:+.0f}"
+                                     for lbl, pts in factors[:4])
+    return line
+
+
+def _narrative_line(snap: TokenSnapshot) -> str:
+    if not snap.narrative or snap.narrative == "other":
+        return ""
+    return f"🔥 <b>{escape(snap.narrative)}</b> meta (hot right now)" if snap.narrative_hot \
+        else f"🏷 {escape(snap.narrative)} meta"
+
+
+def _kol_line(snap: TokenSnapshot) -> str:
+    if not snap.kol_labels:
+        return ""
+    who = ", ".join(escape(k) for k in snap.kol_labels[:3])
+    return f"📣 <b>KOL in:</b> {who}"
+
+
+def _contract_line(snap: TokenSnapshot) -> str:
+    if not snap.contract_risk:
+        return ""
+    crit = [lbl for sev, lbl in (snap.contract_findings or []) if sev == "critical"]
+    warn = [lbl for sev, lbl in (snap.contract_findings or []) if sev == "warning"]
+    line = f"🔍 Contract: {snap.contract_risk}"
+    tail = crit[:2] or warn[:2]
+    if tail:
+        line += " — " + escape(", ".join(tail))
+    return line
+
+
+def _exit_line(snap: TokenSnapshot) -> str:
+    return f"🎚 Exit plan: {escape(snap.exit_target)}" if snap.exit_target else ""
 
 
 def _safety_line(snap: TokenSnapshot) -> str:
@@ -201,12 +248,16 @@ def format_early_launch_html(snap: TokenSnapshot, result: ScoreResult) -> str:
     header = "🌱 EARLY LAUNCH"
     if snap.launchpad:
         header += f" · {escape(snap.launchpad)}"
-    lines = [
-        f"<b>{header} — ${escape(snap.symbol or '???')}</b>",
-        f"<code>{escape(snap.token_address)}</code>",
-    ]
+    lines = [f"<b>{header} — ${escape(snap.symbol or '???')}</b>"]
+    conv = _conviction_line(snap)
+    if conv:
+        lines.append(conv)
+    lines.append(f"<code>{escape(snap.token_address)}</code>")
     if snap.curve_progress_pct is not None:
         lines.append(f"curve {_bar(snap.curve_progress_pct)} {snap.curve_progress_pct:.0f}% (pre-grad)")
+    nar = _narrative_line(snap)
+    if nar:
+        lines.append(nar)
     lines.append(f"💰 MCAP {_usd(snap.market_cap_usd)} · Liq {_usd(snap.liquidity_usd)} "
                  f"· Age {_age(snap.age_minutes)}")
     lines.append(f"👥 Holders {snap.holder_count if snap.holder_count is not None else '?'} "
@@ -215,9 +266,18 @@ def format_early_launch_html(snap: TokenSnapshot, result: ScoreResult) -> str:
     if bp:
         lines.append(f"📊 {bp}")
     lines.append(f"🛡 {safety}")
+    contract = _contract_line(snap)
+    if contract:
+        lines.append(contract)
     smart = _smart_line(snap)
     if smart:
         lines.append(smart)
+    kol = _kol_line(snap)
+    if kol:
+        lines.append(kol)
+    exit_plan = _exit_line(snap)
+    if exit_plan:
+        lines.append(exit_plan)
     links = _links_row(snap)
     if links:
         lines.append(links)
@@ -229,15 +289,26 @@ def to_telegram_html(snap: TokenSnapshot, result: ScoreResult) -> str:
     """Rich, scannable Telegram alert (maturity tier)."""
     sym = escape(snap.symbol or "???")
     header = _LEVEL_HEADER.get(result.level, "ALERT")
-    lines = [f"<b>{header} — ${sym}</b>  ·  {result.composite:.0f}/100",
-             f"<code>{escape(snap.token_address)}</code>"]
+    lines = [f"<b>{header} — ${sym}</b>  ·  {result.composite:.0f}/100"]
+
+    conv = _conviction_line(snap)
+    if conv:
+        lines.append(conv)
+    lines.append(f"<code>{escape(snap.token_address)}</code>")
 
     # Origin + graduation progress bar (pre-grad curve tokens).
+    origin_bits = []
     if snap.launchpad:
-        origin = f"🏷 {escape(snap.launchpad)}"
-        if snap.curve_progress_pct is not None:
-            origin += f" · curve {_bar(snap.curve_progress_pct)} {snap.curve_progress_pct:.0f}% (pre-grad)"
-        lines.append(origin)
+        origin_bits.append(f"🏷 {escape(snap.launchpad)}")
+    if snap.curve_progress_pct is not None:
+        origin_bits.append(f"curve {_bar(snap.curve_progress_pct)} "
+                           f"{snap.curve_progress_pct:.0f}% (pre-grad)")
+    if origin_bits:
+        lines.append(" · ".join(origin_bits))
+
+    nar = _narrative_line(snap)
+    if nar:
+        lines.append(nar)
 
     lines.append(f"💰 MCAP {_usd(snap.market_cap_usd)} · Liq {_usd(snap.liquidity_usd)} "
                  f"· Age {_age(snap.age_minutes)}")
@@ -252,15 +323,25 @@ def to_telegram_html(snap: TokenSnapshot, result: ScoreResult) -> str:
     lines.append(f"{vol} · {bp}" if bp else vol)
 
     lines.append(f"🛡 {_safety_line(snap)}")
+    contract = _contract_line(snap)
+    if contract:
+        lines.append(contract)
 
     smart = _smart_line(snap)
     if smart:
         lines.append(smart)
+    kol = _kol_line(snap)
+    if kol:
+        lines.append(kol)
 
     _abbr = {"safety": "Safe", "distribution": "Dist", "momentum": "Mom", "discovery": "Disc"}
     breakdown = " · ".join(f"{_abbr.get(c.name, c.name[:4].capitalize())} {c.raw:.0f}"
                            for c in result.categories)
-    lines.append(f"🎯 {breakdown}")
+    lines.append(f"📐 {breakdown}")
+
+    exit_plan = _exit_line(snap)
+    if exit_plan:
+        lines.append(exit_plan)
 
     if result.reasons:
         lines.append("💡 " + escape(", ".join(result.reasons[:5])))

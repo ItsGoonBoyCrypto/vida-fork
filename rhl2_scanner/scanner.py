@@ -2334,6 +2334,39 @@ class Scanner:
             "toxic": snap.toxic_buyer,
         })
 
+    async def _attach_alert_intel(self, snap: TokenSnapshot, result: ScoreResult) -> None:
+        """Compute every signal into ONE alert: conviction, exit plan, KOL among
+        buyers, and (gated) a contract audit. All attached to the snapshot so the
+        formatter renders them in a single message."""
+        conv = self._compute_conviction(snap, result)
+        snap.conviction = conv.score
+        snap.conviction_factors = conv.factors
+
+        # Exit plan from the learned top-zone model + the configured stop.
+        model = self._exit_model() if self.cfg.runtime.exit_intel_enabled else None
+        if model:
+            snap.exit_target = (f"TP ~{model['p50']:g}x–{model['p75']:g}x "
+                                f"(winners' median/upper) · trail −{self.cfg.runtime.dump_drawdown_pct:.0f}%")
+
+        # KOL/influencer wallets among this token's smart buyers.
+        try:
+            kols = self.storage.kol_wallets()
+            snap.kol_labels = [kols[w.lower()] for w in (snap.smart_money_wallets or [])
+                               if w.lower() in kols]
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Contract audit (few alerts/hr, so the extra explorer call is affordable).
+        if self.cfg.runtime.contract_audit_on_alert:
+            try:
+                from .contract_audit import audit_functions, risk_summary, wash_trade
+                _verified, names = await self._contract_methods(snap.token_address)
+                audit = audit_functions(names)
+                snap.contract_risk, snap.contract_findings = risk_summary(
+                    audit, wash_trade(snap))
+            except Exception:  # noqa: BLE001
+                log.debug("alert-time contract audit failed", exc_info=True)
+
     async def _process(self, snap: TokenSnapshot) -> Optional[ScoreResult]:
         async with self._sem:
             await self._enrich(snap)
@@ -2394,20 +2427,18 @@ class Scanner:
             log.debug("%s in cooldown (tier=%d, prev=%d), skipping", snap.symbol, tier, prev)
             return result
 
-        # Conviction — fuse every independent signal into one 0-100 confidence.
-        conv = self._compute_conviction(snap, result)
-        conv_line = f"🎯 <b>Conviction {conv.score:.0f}/100</b>"
-        if conv.summary():
-            conv_line += f"  <i>{conv.summary()}</i>"
+        # Fuse EVERY signal into this one alert (conviction, exit plan, KOL,
+        # contract audit) — attached to the snapshot for the formatter.
+        await self._attach_alert_intel(snap, result)
 
         note = self._escalation_note(prev, tier) if escalated else ""
-        note = (note + "\n" if note else "") + conv_line
         if tier == 0:
             html = format_early_launch_html(snap, result)
-            html = note + "\n" + html
+            if note:
+                html = note + "\n" + html
             mid = await self._send_html(html)
             log.info("EARLY %s age=%.0fm liq=%s conv=%.0f", snap.symbol,
-                     snap.age_minutes or 0, snap.liquidity_usd, conv.score)
+                     snap.age_minutes or 0, snap.liquidity_usd, snap.conviction or 0)
         else:
             mid = await self.notifier.send(snap, result, note=note)
             tag = "UPGRADE" if escalated else "ALERT"
@@ -2423,7 +2454,7 @@ class Scanner:
         self.storage.record_alert(snap, result, rank=tier)
         # Track this alert's real outcome (peak x / hit / rug) on first alert.
         if self.perf is not None and prev < 0:
-            self.perf.record_alerted(snap, result, conviction=conv.score)
+            self.perf.record_alerted(snap, result, conviction=snap.conviction or 0.0)
         return result
 
     @staticmethod
