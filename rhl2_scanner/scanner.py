@@ -60,7 +60,7 @@ from .walletwatch import (
     format_top_zone_html,
     format_whale_html,
 )
-from .alerting.formatter import format_early_launch_html
+from .alerting.formatter import format_early_launch_html, to_telegram_html
 from .alerting.telegram import TelegramNotifier
 
 log = logging.getLogger("rhl2.scanner")
@@ -171,6 +171,12 @@ class Scanner:
         self._exit_model_ts: float = 0.0
         self._hot_nar_cache: set = set()   # narratives currently producing winners
         self._hot_nar_ts: float = 0.0
+        # One-click trading (dry-run + OFF by default; see trader/).
+        try:
+            from trader.config import TraderConfig
+            self._trader = TraderConfig.from_env()
+        except Exception:  # noqa: BLE001
+            self._trader = None
 
     # -- lifecycle -------------------------------------------------------
 
@@ -220,10 +226,12 @@ class Scanner:
     def stop(self) -> None:
         self._stop.set()
 
-    async def _send_html(self, text: str, reply_to: Optional[int] = None) -> Optional[int]:
+    async def _send_html(self, text: str, reply_to: Optional[int] = None,
+                         reply_markup: Optional[dict] = None) -> Optional[int]:
         """Send HTML to the alert channel — or, while handling a command, back to
         whichever chat the command came from (so DM commands reply in the DM).
 
+        ``reply_markup`` attaches an inline keyboard (trader buy buttons).
         Returns the sent message_id (for threading follow-ups), or None."""
         tg = self.cfg.telegram
         chat = self._reply_chat or tg.alert_chat_id
@@ -231,7 +239,8 @@ class Scanner:
             from .tgtools import send_message
             try:
                 ok, _detail, mid = await send_message(
-                    tg.bot_token, chat, text, self._session, reply_to=reply_to)
+                    tg.bot_token, chat, text, self._session, reply_to=reply_to,
+                    reply_markup=reply_markup)
                 return mid if ok else None
             except Exception:
                 log.exception("send failed")
@@ -1330,6 +1339,56 @@ class Scanner:
                       "safety-gate or data (see blockers above)."]
         return "\n".join(lines)
 
+    def _buy_keyboard(self, snap: TokenSnapshot):
+        """Inline buy buttons for an alert (None unless trading is enabled)."""
+        if not self._trader or not self._trader.enabled:
+            return None
+        try:
+            from trader.buttons import buy_keyboard
+            chain = (snap.chain or "robinhood").lower()
+            return buy_keyboard(chain, snap.token_address, self._trader)
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def _handle_buy_callback(self, cb: dict) -> None:
+        """A buy button was tapped — authorise + preview (dry-run) the trade."""
+        from .tgtools import answer_callback
+        tg = self.cfg.telegram
+        cb_id = cb.get("id")
+        from_id = (cb.get("from") or {}).get("id")
+        data = cb.get("data") or ""
+        msg = cb.get("message") or {}
+        chat_id = str((msg.get("chat") or {}).get("id"))
+        try:
+            from trader.buttons import parse_callback
+            from trader.engine import preview_buy
+            parsed = parse_callback(data)
+            if not parsed or self._trader is None:
+                return
+            chain, token, idx = parsed
+            presets = self._trader.presets_for(chain)
+            amount = presets[idx] if idx < len(presets) else (presets[0] if presets else 0)
+            # Only tokens we actually alerted are buyable (allowlist rail).
+            alerted = self.storage.token_alerted(token)
+            # Native USD (EVM chains) so the preview can size the buy; SOL n/a here.
+            native_usd = self._eth_usd if chain != "solana" else None
+            res = preview_buy(
+                chain, token, amount, from_id, symbol="", alerted=alerted,
+                spent_today=0.0, cfg=self._trader, native_usd=native_usd)
+            if tg.bot_token and cb_id:
+                await answer_callback(tg.bot_token, cb_id,
+                                      "Preview sent" if res.ok else res.reason,
+                                      self._session)
+            self._reply_chat = chat_id
+            try:
+                await self._send_html(res.preview if res.ok else f"🚫 {res.reason}")
+            finally:
+                self._reply_chat = None
+        except Exception:  # noqa: BLE001
+            log.debug("buy callback failed", exc_info=True)
+            if tg.bot_token and cb_id:
+                await answer_callback(tg.bot_token, cb_id, "error", self._session)
+
     async def _poll_commands(self) -> None:
         """Receive /zero /unzero /muted from the alert channel and act on them."""
         tg = self.cfg.telegram
@@ -1349,6 +1408,10 @@ class Scanner:
         max_age = self.cfg.runtime.command_max_age_seconds
         now = time.time()
         for u in updates:
+            # Inline buy-button taps arrive as callback_query, not messages.
+            if u.get("callback_query"):
+                await self._handle_buy_callback(u["callback_query"])
+                continue
             msg = u.get("message") or u.get("channel_post") or u.get("edited_channel_post") or {}
             chat = msg.get("chat") or {}
             text = (msg.get("text") or "").strip()
@@ -2550,15 +2613,17 @@ class Scanner:
             return result
 
         note = self._escalation_note(prev, tier) if escalated else ""
+        kb = self._buy_keyboard(snap)
         if tier == 0:
             html = format_early_launch_html(snap, result)
             if note:
                 html = note + "\n" + html
-            mid = await self._send_html(html)
+            mid = await self._send_html(html, reply_markup=kb)
             log.info("EARLY %s age=%.0fm liq=%s conv=%.0f", snap.symbol,
                      snap.age_minutes or 0, snap.liquidity_usd, snap.conviction or 0)
         else:
-            mid = await self.notifier.send(snap, result, note=note)
+            html = (note + "\n" if note else "") + to_telegram_html(snap, result)
+            mid = await self._send_html(html, reply_markup=kb)
             tag = "UPGRADE" if escalated else "ALERT"
             log.info("%s %s %s score=%.0f", tag, result.level.value, snap.symbol, result.composite)
         # Remember the FIRST alert's message id so milestone/dump follow-ups can

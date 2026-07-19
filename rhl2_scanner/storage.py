@@ -263,6 +263,13 @@ class Storage:
         )
         self._conn.commit()
 
+    def token_alerted(self, token_address: str) -> bool:
+        """True if we've ever alerted on this token (the buy allowlist)."""
+        cur = self._conn.execute(
+            "SELECT 1 FROM seen_tokens WHERE token_address = ? AND best_alert_rank >= 0",
+            (token_address.lower(),))
+        return cur.fetchone() is not None
+
     def last_alerted(self, pair_address: str) -> Optional[float]:
         cur = self._conn.execute(
             "SELECT last_alerted FROM seen_tokens WHERE pair_address = ?",

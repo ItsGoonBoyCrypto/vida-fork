@@ -37,11 +37,13 @@ async def _call(token: str, method: str, params: Optional[dict], session: aiohtt
 
 async def send_message(token: str, chat_id: str, text: str,
                        session: Optional[aiohttp.ClientSession] = None,
-                       reply_to: Optional[int] = None) -> tuple[bool, str, Optional[int]]:
+                       reply_to: Optional[int] = None,
+                       reply_markup: Optional[dict] = None) -> tuple[bool, str, Optional[int]]:
     """Send a message. Returns (ok, detail, message_id). HTML, no link preview.
 
     ``reply_to`` threads this message as a reply to an earlier one (used to hang
-    milestone/dump follow-ups under the original alert).
+    milestone/dump follow-ups under the original alert). ``reply_markup`` attaches
+    an inline keyboard (e.g. the trader's buy buttons).
     """
     own = session is None
     session = session or aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
@@ -51,6 +53,8 @@ async def send_message(token: str, chat_id: str, text: str,
         if reply_to:
             payload["reply_parameters"] = {"message_id": reply_to,
                                            "allow_sending_without_reply": True}
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
         data = await _call(token, "sendMessage", payload, session, post=True)
         if not data:
             return False, "no response (network/egress blocked?)", None
@@ -58,6 +62,23 @@ async def send_message(token: str, chat_id: str, text: str,
             mid = (data.get("result") or {}).get("message_id")
             return True, "sent", mid
         return False, f"telegram error: {data.get('description', 'unknown')}", None
+    finally:
+        if own:
+            await session.close()
+
+
+async def answer_callback(token: str, callback_id: str, text: str = "",
+                          session: Optional[aiohttp.ClientSession] = None) -> None:
+    """Ack an inline-button tap (stops the client's loading spinner)."""
+    own = session is None
+    session = session or aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
+    try:
+        payload = {"callback_query_id": callback_id}
+        if text:
+            payload["text"] = text[:200]
+        await _call(token, "answerCallbackQuery", payload, session, post=True)
+    except Exception:  # noqa: BLE001
+        pass
     finally:
         if own:
             await session.close()

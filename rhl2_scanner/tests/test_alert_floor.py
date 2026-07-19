@@ -27,15 +27,12 @@ class TestAlertFloor(unittest.IsolatedAsyncioTestCase):
             setattr(cfg.runtime, k, v)
         sc = Scanner(cfg)
         sc._sent = []
-        async def fake_send(html, reply_to=None):
+        async def fake_send(html, reply_to=None, reply_markup=None):
             sc._sent.append(html); return 1
         sc._send_html = fake_send            # type: ignore
         async def fake_enrich(snap):
             pass
         sc._enrich = fake_enrich             # type: ignore
-        async def fake_notify(snap, result, note=""):
-            sc._sent.append("NOTIFIER:" + (note or "")); return 1
-        sc.notifier.send = fake_notify       # type: ignore
         async def fake_intel(snap, result):
             snap.conviction = getattr(snap, "_test_conv", 70.0)
         sc._attach_alert_intel = fake_intel  # type: ignore
@@ -64,7 +61,7 @@ class TestAlertFloor(unittest.IsolatedAsyncioTestCase):
         scan_mod.score_token = lambda *a, **k: _res(AlertLevel.WATCH, 58)  # >= 55
         try:
             await sc._process(self._snap())
-            self.assertTrue(any("NOTIFIER" in h for h in sc._sent))
+            self.assertTrue(any("GEM" in h for h in sc._sent), sc._sent)  # alert fired
         finally:
             scan_mod.score_token = self._orig
             sc.storage.close()
