@@ -164,6 +164,28 @@ class PaperTrader:
             subset = [r for r in rows if r["level"] == level]
             report["by_level"][level] = _stats(subset)
 
+        # By signal — split each category into high (>=60) vs low, so the hit/rug
+        # split reveals WHICH signal precedes rugs (feed for tuning + auto-tune).
+        import json as _json
+
+        def _cat(r, name):
+            try:
+                return _json.loads(r["breakdown_json"] or "{}").get(name)
+            except Exception:  # noqa: BLE001
+                return None
+        report["by_signal"] = {}
+        for cat in ("safety", "distribution", "momentum", "discovery"):
+            hi = [r for r in rows if (_cat(r, cat) or 0) >= 60]
+            lo = [r for r in rows if _cat(r, cat) is not None and (_cat(r, cat) or 0) < 60]
+            report["by_signal"][cat] = {"high": _stats(hi), "low": _stats(lo)}
+
+        # By liquidity health (liq/mcap): thin pools are classic rug traps.
+        def _lqm(r):
+            return (r["entry_liq"] / r["entry_mcap"]) if (r["entry_liq"] and r["entry_mcap"]) else None
+        report["by_liq"] = {
+            "thin (<5%)": _stats([r for r in rows if (_lqm(r) or 1) < 0.05]),
+            "healthy (>=5%)": _stats([r for r in rows if (_lqm(r) or 0) >= 0.05]),
+        }
         return report
 
 
@@ -201,6 +223,41 @@ def format_digest_html(rep: dict, win_multiple: float = 2.0,
         lines.append("")
         lines.append("<b>By alert level</b>")
         lines.extend(level_lines)
+
+    # By signal — high vs low for each category, so you can see which signal
+    # actually precedes winners (and which precedes rugs). Only render a row
+    # once there's enough of a sample to mean anything.
+    sig = rep.get("by_signal") or {}
+    sig_lines = []
+    for cat in ("safety", "distribution", "momentum", "discovery"):
+        s = sig.get(cat) or {}
+        hi, lo = s.get("high") or {}, s.get("low") or {}
+        if (hi.get("n") or 0) + (lo.get("n") or 0) < 4:
+            continue
+
+        def _seg(d):
+            if not d.get("n"):
+                return "—"
+            return f"hit {d['hit_rate']:.0%}/rug {d['rug_rate']:.0%} (n{d['n']})"
+        sig_lines.append(escape(f"• {cat}: hi {_seg(hi)} · lo {_seg(lo)}"))
+    if sig_lines:
+        lines.append("")
+        lines.append("<b>By signal — high (≥60) vs low</b>")
+        lines.extend(sig_lines)
+
+    # By liquidity health — thin pools are classic rug traps.
+    liq = rep.get("by_liq") or {}
+    liq_lines = []
+    for label, s in liq.items():
+        if s.get("n"):
+            liq_lines.append(
+                escape(f"• {label}: n={s['n']} · hit {s['hit_rate']:.0%} · "
+                       f"rug {s['rug_rate']:.0%}")
+            )
+    if liq_lines:
+        lines.append("")
+        lines.append("<b>By liquidity (liq/mcap)</b>")
+        lines.extend(liq_lines)
 
     lines.append("")
     lines.append("<i>Signals, not advice. Tune thresholds off the hit/rug split.</i>")

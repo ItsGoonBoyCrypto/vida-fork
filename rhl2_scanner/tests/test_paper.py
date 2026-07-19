@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 from rhl2_scanner.config import Config
-from rhl2_scanner.models import AlertLevel, ScoreResult, TokenSnapshot
+from rhl2_scanner.models import AlertLevel, CategoryScore, ScoreResult, TokenSnapshot
 from rhl2_scanner.paper import PaperTrader, format_digest_html, format_report, send_digest
 from rhl2_scanner.storage import Storage
 
@@ -93,6 +93,45 @@ class TestPaper(unittest.TestCase):
         self.assertIn("Daily Calibration", html)
         self.assertIn("<b>", html)
         self.assertIn("By score band", html)
+
+    def test_by_signal_and_liq_breakdown(self):
+        # Four trades: high-momentum winners vs low-momentum rugs, so the split
+        # is unambiguous; also thin vs healthy liquidity.
+        def _res(mom):
+            cats = [
+                CategoryScore(name="safety", raw=90, weight=0.4),
+                CategoryScore(name="distribution", raw=70, weight=0.24),
+                CategoryScore(name="momentum", raw=mom, weight=0.21),
+                CategoryScore(name="discovery", raw=60, weight=0.15),
+            ]
+            return ScoreResult(composite=70, level=AlertLevel.WATCH,
+                               categories=cats, safety_passed=True)
+
+        # high momentum → winners (peak 3x); thin liq
+        for i, mom in enumerate((85, 80)):
+            s = _snap(f"HI{i}", 1.0)
+            s.liquidity_usd, s.market_cap_usd = 1_000, 100_000   # 1% thin
+            tid = self.storage.open_paper_trade(s, _res(mom))
+            self.storage.update_paper_trade(tid, 3.0, {}, 3.0, 0.9, settled=True)
+        # low momentum → rugs (min 0.3x); healthy liq
+        for i, mom in enumerate((20, 30)):
+            s = _snap(f"LO{i}", 1.0)
+            s.liquidity_usd, s.market_cap_usd = 20_000, 100_000  # 20% healthy
+            tid = self.storage.open_paper_trade(s, _res(mom))
+            self.storage.update_paper_trade(tid, 0.3, {}, 1.0, 0.3, settled=True)
+
+        rep = self.trader.report(win_multiple=2.0)
+        mom = rep["by_signal"]["momentum"]
+        self.assertEqual(mom["high"]["n"], 2)
+        self.assertEqual(mom["high"]["hit_rate"], 1.0)   # high momentum → all won
+        self.assertEqual(mom["low"]["n"], 2)
+        self.assertEqual(mom["low"]["rug_rate"], 1.0)    # low momentum → all rugged
+        self.assertEqual(rep["by_liq"]["thin (<5%)"]["n"], 2)
+        self.assertEqual(rep["by_liq"]["healthy (>=5%)"]["n"], 2)
+
+        html = format_digest_html(rep, 2.0)
+        self.assertIn("By signal", html)
+        self.assertIn("By liquidity", html)
 
 
 class TestDigestSend(unittest.IsolatedAsyncioTestCase):
