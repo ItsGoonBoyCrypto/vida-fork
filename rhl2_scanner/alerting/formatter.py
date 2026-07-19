@@ -97,8 +97,10 @@ def _links_row(snap: TokenSnapshot) -> str:
         bits.append(f'<a href="{escape(snap.dexscreener_url)}">📈 Chart</a>')
     if snap.explorer_url:
         bits.append(f'<a href="{escape(snap.explorer_url)}">🔍 Scan</a>')
-    if snap.socials.get("twitter"):
-        bits.append(f'<a href="{escape(snap.socials["twitter"])}">𝕏</a>')
+    # DexScreener labels twitter as "twitter" or "x" depending on the token.
+    tw = snap.socials.get("twitter") or snap.socials.get("x")
+    if tw:
+        bits.append(f'<a href="{escape(tw)}">𝕏</a>')
     if snap.socials.get("telegram"):
         bits.append(f'<a href="{escape(snap.socials["telegram"])}">💬 TG</a>')
     if snap.socials.get("website"):
@@ -165,6 +167,10 @@ def _contract_line(snap: TokenSnapshot) -> str:
 
 def _exit_line(snap: TokenSnapshot) -> str:
     return f"🎚 Exit plan: {escape(snap.exit_target)}" if snap.exit_target else ""
+
+
+def _dev_line(snap: TokenSnapshot) -> str:
+    return f"🏭 Dev: {escape(snap.dev_note)}" if snap.dev_note else ""
 
 
 def _honeypot_line(snap: TokenSnapshot) -> str:
@@ -301,6 +307,9 @@ def format_early_launch_html(snap: TokenSnapshot, result: ScoreResult) -> str:
     kol = _kol_line(snap)
     if kol:
         lines.append(kol)
+    dev = _dev_line(snap)
+    if dev:
+        lines.append(dev)
     exit_plan = _exit_line(snap)
     if exit_plan:
         lines.append(exit_plan)
@@ -362,6 +371,9 @@ def to_telegram_html(snap: TokenSnapshot, result: ScoreResult) -> str:
     kol = _kol_line(snap)
     if kol:
         lines.append(kol)
+    dev = _dev_line(snap)
+    if dev:
+        lines.append(dev)
 
     _abbr = {"safety": "Safe", "distribution": "Dist", "momentum": "Mom", "discovery": "Disc"}
     breakdown = " · ".join(f"{_abbr.get(c.name, c.name[:4].capitalize())} {c.raw:.0f}"

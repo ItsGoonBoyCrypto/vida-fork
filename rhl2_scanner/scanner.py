@@ -2389,6 +2389,23 @@ class Scanner:
             except Exception:  # noqa: BLE001
                 log.debug("alert-time contract audit failed", exc_info=True)
 
+        # Dev-wallet track record — has this deployer shipped winners/rugs before?
+        # (Skips shared launchpad managers, so on flap this only fires for
+        # direct-deploy tokens — most useful on the EVM chains via memelab.)
+        try:
+            creator = await self._creator_of(snap.token_address)
+            if creator and creator not in self.cfg.known_launchpad_addresses():
+                hp = self.storage.is_honeypot_deployer(creator)
+                rep = self.storage.deployer_reputation(creator)
+                if hp:
+                    snap.dev_note = f"⚠️ dev shipped {hp} honeypot(s) before"
+                elif rep["rugs"]:
+                    snap.dev_note = f"⚠️ dev rugged {rep['rugs']}× before"
+                elif rep["wins"]:
+                    snap.dev_note = f"🔥 dev launched {rep['wins']} prior winner(s)"
+        except Exception:  # noqa: BLE001
+            log.debug("dev-note resolution failed", exc_info=True)
+
     async def _check_honeypot(self, snap: TokenSnapshot, result: ScoreResult) -> bool:
         """Fire a 🍯 warning for an INTERESTING can't-sell trap (instead of the
         silent gate-skip), and record its deployer so the scammer's next launch is
