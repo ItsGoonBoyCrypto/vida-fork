@@ -78,6 +78,30 @@ CREATE TABLE IF NOT EXISTS manual_winners (
     ts            REAL NOT NULL,
     PRIMARY KEY (chain, token)
 );
+
+-- Wallet reputation ledger (per chain) ------------------------------------
+-- Every (wallet, winner-token) it was an early buyer of; DISTINCT count per
+-- wallet = its winner-overlap, the primary quality signal.
+CREATE TABLE IF NOT EXISTS wallet_winners (
+    chain   TEXT NOT NULL,
+    wallet  TEXT NOT NULL,
+    token   TEXT NOT NULL,
+    mult    REAL,
+    ts      REAL NOT NULL,
+    PRIMARY KEY (chain, wallet, token)
+);
+CREATE INDEX IF NOT EXISTS idx_ml_ww ON wallet_winners(chain, wallet);
+
+-- Forward picks: a smart wallet was seen among a token's buyers. Joined with
+-- tokens.outcome to score whether that wallet's later picks actually pumped.
+CREATE TABLE IF NOT EXISTS smart_buys (
+    chain   TEXT NOT NULL,
+    wallet  TEXT NOT NULL,
+    token   TEXT NOT NULL,
+    ts      REAL NOT NULL,
+    PRIMARY KEY (chain, wallet, token)
+);
+CREATE INDEX IF NOT EXISTS idx_ml_sb ON smart_buys(chain, wallet);
 """
 
 
@@ -334,6 +358,51 @@ class Store:
                 m = {}
             out.append({"chain": r["chain"], "token": r["token"], "symbol": r["symbol"],
                         "metrics": m, "buyers_added": r["buyers_added"], "ts": r["ts"]})
+        return out
+
+    # -- wallet reputation ledger ---------------------------------------
+
+    def record_wallet_winner(self, chain: Chain, wallet: str, token: str,
+                             mult: float = 0.0) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO wallet_winners (chain, wallet, token, mult, ts) "
+            "VALUES (?,?,?,?,?)",
+            (chain.value, wallet.lower(), token.lower(), float(mult or 0.0), time.time()))
+        self._conn.commit()
+
+    def record_smart_buy(self, chain: Chain, wallet: str, token: str) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO smart_buys (chain, wallet, token, ts) VALUES (?,?,?,?)",
+            (chain.value, wallet.lower(), token.lower(), time.time()))
+        self._conn.commit()
+
+    def wallet_reputation_rows(self, chain: Chain, wallets: list) -> dict:
+        """{wallet: {winner_overlap, pick_wins, pick_total}} for a chain's wallets.
+
+        Forward picks join smart_buys with the tokens table's realized outcome
+        (peak_multiple >= 2 counts as a win), so a wallet's later picks are graded
+        by what actually happened."""
+        out: dict = {}
+        if not wallets:
+            return out
+        ws = [w.lower() for w in wallets]
+        for w in ws:
+            out[w] = {"winner_overlap": 0, "pick_wins": 0, "pick_total": 0}
+        qs = ",".join("?" for _ in ws)
+        args = [chain.value, *ws]
+        for r in self._conn.execute(
+                f"SELECT wallet, COUNT(*) n FROM wallet_winners "
+                f"WHERE chain = ? AND wallet IN ({qs}) GROUP BY wallet", args):
+            out[r["wallet"]]["winner_overlap"] = r["n"]
+        for r in self._conn.execute(
+                f"SELECT sb.wallet AS wallet, "
+                "  SUM(CASE WHEN t.peak_multiple >= 2.0 THEN 1 ELSE 0 END) AS wins, "
+                "  SUM(CASE WHEN t.outcome IN ('winner','rug','neutral') THEN 1 ELSE 0 END) AS total "
+                "FROM smart_buys sb JOIN tokens t "
+                "  ON t.chain = sb.chain AND t.token_address = sb.token "
+                f"WHERE sb.chain = ? AND sb.wallet IN ({qs}) GROUP BY sb.wallet", args):
+            out[r["wallet"]]["pick_wins"] = r["wins"] or 0
+            out[r["wallet"]]["pick_total"] = r["total"] or 0
         return out
 
     # -- coverage stats -------------------------------------------------

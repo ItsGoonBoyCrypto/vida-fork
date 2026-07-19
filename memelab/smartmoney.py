@@ -77,22 +77,47 @@ class SmartMoney:
         return self.store.is_smart_wallet(chain, wallet)
 
     async def annotate(self, snap: TokenSnapshot) -> None:
-        """Set snap.smart_money_wallets = smart wallets among this token's buyers."""
+        """Set snap.smart_money_wallets = smart wallets among this token's buyers,
+        plus snap.smart_money_quality = the summed reputation of those wallets."""
         smart = self.store.smart_wallets(snap.chain)
         if not smart:
             return
         buyers = await self._buyers(snap.chain, snap.token_address)
-        hits = [b for b in buyers if b in smart]
-        if hits:
-            snap.smart_money_wallets = sorted(set(hits))
+        hits = sorted({b for b in buyers if b in smart})
+        if not hits:
+            return
+        snap.smart_money_wallets = hits
+        # Forward-pick ledger: record that these smart wallets bought this token,
+        # so their later track record can be graded once it settles.
+        for w in hits:
+            try:
+                self.store.record_smart_buy(snap.chain, w, snap.token_address)
+            except Exception:  # noqa: BLE001
+                pass
+        # Quality-weight: sum each buyer's 0..1 reputation → the learnable feature.
+        try:
+            from . import wallet_intel as wi
+            rep = self.store.wallet_reputation_rows(snap.chain, hits)
+            snap.smart_money_quality = wi.quality_sum(
+                [wi.quality(rep.get(w, {})) for w in hits])
+        except Exception:  # noqa: BLE001
+            snap.smart_money_quality = None
 
-    async def harvest_winner(self, chain: Chain, token: str) -> int:
-        """Add a confirmed winner's earliest buyers to the smart set. Returns count."""
+    async def harvest_winner(self, chain: Chain, token: str, mult: float = 0.0) -> int:
+        """Add a confirmed winner's earliest buyers to the smart set. Returns count.
+
+        Also credits every early buyer in the reputation ledger against this
+        winner (wallet_winners) — DISTINCT winners per wallet = its overlap, the
+        primary quality signal — even for a wallet already in the set."""
         if not self.store.mark_harvested(chain, token):
             return 0
         buyers = await self._early_buyers(chain, token, self.harvest_buyers)
         added = 0
         for w in buyers:
+            try:
+                self.store.record_wallet_winner(chain, w, token, mult)
+            except Exception:  # noqa: BLE001
+                pass
             if self.store.add_smart_wallet(chain, w, source=f"winner:{token.lower()}"):
                 added += 1
         if added:

@@ -85,6 +85,10 @@ class TokenSnapshot:
     launchpad: str = ""                   # "flap" | "pumpfun" | "" …
     socials: dict = field(default_factory=dict)
     smart_money_wallets: list = field(default_factory=list)
+    # Sum of the reputation qualities of the smart wallets among this token's
+    # buyers (0..N). Quality-weights the flat smart_money_count so proven sharps
+    # count for more than unproven harvests. Populated at annotate.
+    smart_money_quality: Optional[float] = None
     dex_boosted: bool = False
 
     # Social sentiment (LunarCrush; None = not covered / not fetched)

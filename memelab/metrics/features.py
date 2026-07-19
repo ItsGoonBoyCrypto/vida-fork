@@ -16,6 +16,7 @@ FEATURE_NAMES = [
     "price_change_5m", "vol_to_mcap", "holder_count", "holder_growth",
     "holder_velocity", "liq_growth", "top10_pct", "top1_pct",
     "dev_holdings_pct", "bundle_pct", "sniper_pct", "smart_money_count",
+    "smart_money_quality",
     "has_socials", "launchpad_flag", "dex_boosted", "is_sellable",
     "authorities_ok", "lp_safe", "risk_score",
     "social_volume", "social_sentiment", "social_score",
@@ -62,6 +63,10 @@ def _features_from(early: list, first: TokenSnapshot, last: TokenSnapshot) -> di
     f["bundle_pct"] = last.bundle_supply_pct
     f["sniper_pct"] = last.sniper_cluster_pct
     f["smart_money_count"] = len(last.smart_money_wallets or [])
+    # Quality-weighted smart money: proven multi-winner wallets count for more
+    # than unproven harvests (None until the reputation ledger has data).
+    if last.smart_money_quality is not None:
+        f["smart_money_quality"] = last.smart_money_quality
     f["has_socials"] = 1.0 if last.socials else 0.0
     f["launchpad_flag"] = 1.0 if last.launchpad else 0.0
     f["dex_boosted"] = 1.0 if last.dex_boosted else 0.0
