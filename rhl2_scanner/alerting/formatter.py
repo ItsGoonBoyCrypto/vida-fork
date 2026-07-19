@@ -53,6 +53,58 @@ def _age(minutes: float | None) -> str:
     return f"{minutes/1440:.1f}d"
 
 
+def _bar(pct: float | None, n: int = 10) -> str:
+    """A 10-cell progress bar, e.g. ▰▰▰▰▰▰▱▱▱▱ for 60%."""
+    if pct is None:
+        return ""
+    filled = max(0, min(n, round(pct / 100.0 * n)))
+    return "▰" * filled + "▱" * (n - filled)
+
+
+def _buy_pressure(snap: TokenSnapshot) -> str:
+    """Compact 5m buy/sell pressure with a traffic-light dot, or '' if unknown."""
+    b, s = snap.buys_5m, snap.sells_5m
+    if b is None or s is None or (b + s) == 0:
+        # fall back to 1h
+        b, s = snap.buys_1h, snap.sells_1h
+        win = "1h"
+    else:
+        win = "5m"
+    if b is None or s is None or (b + s) == 0:
+        return ""
+    ratio = b / (b + s)
+    dot = "🟢" if ratio >= 0.65 else "🟡" if ratio >= 0.5 else "🔴"
+    return f"Buys {win}: {b}·{s} {dot} {ratio*100:.0f}%"
+
+
+def _links_row(snap: TokenSnapshot) -> str:
+    """One tap-row of the links that matter — pre-grad tokens have no DEX pair,
+    so the launchpad trade link + explorer carry them; graduated ones get the chart."""
+    bits = []
+    if snap.trade_url:
+        bits.append(f'<a href="{escape(snap.trade_url)}">🚀 Trade</a>')
+    if snap.dexscreener_url:
+        bits.append(f'<a href="{escape(snap.dexscreener_url)}">📈 Chart</a>')
+    if snap.explorer_url:
+        bits.append(f'<a href="{escape(snap.explorer_url)}">🔍 Scan</a>')
+    if snap.socials.get("twitter"):
+        bits.append(f'<a href="{escape(snap.socials["twitter"])}">𝕏</a>')
+    if snap.socials.get("telegram"):
+        bits.append(f'<a href="{escape(snap.socials["telegram"])}">💬 TG</a>')
+    if snap.socials.get("website"):
+        bits.append(f'<a href="{escape(snap.socials["website"])}">🌐 Web</a>')
+    return " · ".join(bits)
+
+
+def _smart_line(snap: TokenSnapshot) -> str:
+    n = len(snap.smart_money_wallets or [])
+    if not n:
+        return ""
+    heads = ", ".join(w[:6] + "…" for w in snap.smart_money_wallets[:3])
+    more = f" +{n-3}" if n > 3 else ""
+    return f"🧠 Smart money: <b>{n}</b> in ({heads}{more})"
+
+
 def _safety_line(snap: TokenSnapshot) -> str:
     s = snap.safety
     parts = []
@@ -145,36 +197,69 @@ def format_early_launch_html(snap: TokenSnapshot, result: ScoreResult) -> str:
         header += f" · {escape(snap.launchpad)}"
     lines = [
         f"<b>{header} — ${escape(snap.symbol or '???')}</b>",
-        f"Age: {_age(snap.age_minutes)} | MCAP: {_usd(snap.market_cap_usd)} | Liq: {_usd(snap.liquidity_usd)}",
-        f"Holders: {snap.holder_count if snap.holder_count is not None else '?'} | "
-        f"Top10: {_pct(snap.top10_supply_pct)}",
-        f"Safety: {safety}",
-        f"CA: <code>{escape(snap.token_address)}</code>",
+        f"<code>{escape(snap.token_address)}</code>",
     ]
-    if snap.dexscreener_url:
-        lines.append(f'<a href="{escape(snap.dexscreener_url)}">DexScreener</a>')
+    if snap.curve_progress_pct is not None:
+        lines.append(f"curve {_bar(snap.curve_progress_pct)} {snap.curve_progress_pct:.0f}% (pre-grad)")
+    lines.append(f"💰 MCAP {_usd(snap.market_cap_usd)} · Liq {_usd(snap.liquidity_usd)} "
+                 f"· Age {_age(snap.age_minutes)}")
+    lines.append(f"👥 Holders {snap.holder_count if snap.holder_count is not None else '?'} "
+                 f"· Top10 {_pct(snap.top10_supply_pct)}")
+    bp = _buy_pressure(snap)
+    if bp:
+        lines.append(f"📊 {bp}")
+    lines.append(f"🛡 {safety}")
+    smart = _smart_line(snap)
+    if smart:
+        lines.append(smart)
+    links = _links_row(snap)
+    if links:
+        lines.append(links)
     lines.append("<i>Fresh launch — highest risk/reward. DYOR, size small.</i>")
     return "\n".join(lines)
 
 
 def to_telegram_html(snap: TokenSnapshot, result: ScoreResult) -> str:
-    lines = []
-    for line in build_lines(snap, result):
-        if line.startswith("CA: ") and snap.token_address:
-            # <code> makes the address tap-to-copy in Telegram.
-            lines.append(f"CA: <code>{escape(snap.token_address)}</code>")
-        else:
-            lines.append(escape(line))
-    link_bits = []
-    if snap.dexscreener_url:
-        link_bits.append(f'<a href="{escape(snap.dexscreener_url)}">DexScreener</a>')
-    if snap.chart_url:
-        link_bits.append(f'<a href="{escape(snap.chart_url)}">Chart</a>')
-    if snap.socials.get("telegram"):
-        link_bits.append(f'<a href="{escape(snap.socials["telegram"])}">TG</a>')
-    if link_bits:
-        lines.append("Links: " + " | ".join(link_bits))
-    # Bold the first line (header + score).
-    if lines:
-        lines[0] = f"<b>{lines[0]}</b>"
+    """Rich, scannable Telegram alert (maturity tier)."""
+    sym = escape(snap.symbol or "???")
+    header = _LEVEL_HEADER.get(result.level, "ALERT")
+    lines = [f"<b>{header} — ${sym}</b>  ·  {result.composite:.0f}/100",
+             f"<code>{escape(snap.token_address)}</code>"]
+
+    # Origin + graduation progress bar (pre-grad curve tokens).
+    if snap.launchpad:
+        origin = f"🏷 {escape(snap.launchpad)}"
+        if snap.curve_progress_pct is not None:
+            origin += f" · curve {_bar(snap.curve_progress_pct)} {snap.curve_progress_pct:.0f}% (pre-grad)"
+        lines.append(origin)
+
+    lines.append(f"💰 MCAP {_usd(snap.market_cap_usd)} · Liq {_usd(snap.liquidity_usd)} "
+                 f"· Age {_age(snap.age_minutes)}")
+
+    holders = snap.holder_count if snap.holder_count is not None else "?"
+    grow = " ↑" if (snap.holder_growth_1h or 0) > 0 else ""
+    lines.append(f"👥 Holders {holders}{grow} · Top10 {_pct(snap.top10_supply_pct)}")
+
+    accel = " ↑" if snap.volume_accelerating else ""
+    bp = _buy_pressure(snap)
+    vol = f"📊 Vol1h {_usd(snap.volume_1h)}{accel}"
+    lines.append(f"{vol} · {bp}" if bp else vol)
+
+    lines.append(f"🛡 {_safety_line(snap)}")
+
+    smart = _smart_line(snap)
+    if smart:
+        lines.append(smart)
+
+    _abbr = {"safety": "Safe", "distribution": "Dist", "momentum": "Mom", "discovery": "Disc"}
+    breakdown = " · ".join(f"{_abbr.get(c.name, c.name[:4].capitalize())} {c.raw:.0f}"
+                           for c in result.categories)
+    lines.append(f"🎯 {breakdown}")
+
+    if result.reasons:
+        lines.append("💡 " + escape(", ".join(result.reasons[:5])))
+
+    links = _links_row(snap)
+    if links:
+        lines.append(links)
     return "\n".join(lines)

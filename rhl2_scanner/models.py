@@ -115,6 +115,8 @@ class TokenSnapshot:
     # Links
     dexscreener_url: str = ""
     chart_url: str = ""
+    explorer_url: str = ""      # Blockscout token page (holders/transfers/contract)
+    trade_url: str = ""         # launchpad trade page (flap/bags) — works pre-graduation
 
     # Nested safety facts
     safety: SafetyReport = field(default_factory=SafetyReport)

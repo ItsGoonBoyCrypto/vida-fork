@@ -98,6 +98,7 @@ chain:
       # Addresses from the Bags RH mainnet deploy (docs.bags.fm/robinhood).
       manager: "0xC82Db941dAf90B754aecb5F7D14c683dc608d595"   # BagsLens (RHL2_BAGS_MANAGER/_LENS overrides)
       factory: "0xe8Cc4431adF8b5A847C113EF0c6af9043219Cb37"   # BagsFactory proxy (RHL2_BAGS_FACTORY overrides)
+      trade_url_template: "https://bags.fm/{token}"           # one-tap Trade link in alerts
       kind: curve
       boost: 12
       confirm_fn: "getTokenState(address)"

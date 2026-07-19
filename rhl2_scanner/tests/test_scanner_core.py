@@ -165,7 +165,7 @@ class TestEarlyLaunch(unittest.TestCase):
         html = format_early_launch_html(snap, r)
         self.assertIn("EARLY LAUNCH", html)
         self.assertIn(f"<code>{snap.token_address}</code>", html)   # copyable CA
-        self.assertIn("Age: 8m", html)
+        self.assertIn("Age 8m", html)
 
     def test_min_market_cap_floor_gates(self):
         from rhl2_scanner.config import Thresholds
@@ -256,7 +256,7 @@ class TestFormatter(unittest.TestCase):
         snap = clean_token()
         r = score_token(snap, Config(), strict_safety=True)
         html = to_telegram_html(snap, r)
-        self.assertIn(f"CA: <code>{snap.token_address}</code>", html)  # tap-to-copy
+        self.assertIn(f"<code>{snap.token_address}</code>", html)  # tap-to-copy CA
 
 
 if __name__ == "__main__":

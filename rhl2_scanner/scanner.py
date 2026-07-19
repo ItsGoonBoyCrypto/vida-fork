@@ -2160,3 +2160,18 @@ class Scanner:
             _safe(chain.enrich_distribution(snap)),
             _safe(smart.active_wallets(snap)),
         )
+
+        # Attach one-tap links for the alert (explorer + launchpad trade page).
+        self._attach_links(snap)
+
+    def _attach_links(self, snap: TokenSnapshot) -> None:
+        """Populate explorer_url (Blockscout token page) + trade_url (launchpad)."""
+        base = (self.cfg.chain.explorer_api_url or "").rstrip("/")
+        if base.endswith("/api"):
+            base = base[:-4]
+        if base and snap.token_address:
+            snap.explorer_url = f"{base}/token/{snap.token_address}"
+        lp = self.cfg._launchpad(snap.launchpad) if snap.launchpad else None
+        tmpl = (lp or {}).get("trade_url_template") if lp else ""
+        if tmpl and snap.token_address:
+            snap.trade_url = tmpl.replace("{token}", snap.token_address)
