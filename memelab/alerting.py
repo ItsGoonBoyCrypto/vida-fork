@@ -14,17 +14,22 @@ from .models import Chain, Screen
 
 log = logging.getLogger("memelab.alerting")
 
-_CHAIN_EMOJI = {Chain.ROBINHOOD: "🪙", Chain.SOLANA: "◎",
-                Chain.ETHEREUM: "Ξ", Chain.BASE: "🔵", Chain.BNB: "🟡"}
+# Colored chain badge for the unified multi-chain feed (⚪ = grey stand-in; no
+# true grey circle emoji exists).
+_CHAIN_BADGE = {Chain.ROBINHOOD: "🟢 RH", Chain.SOLANA: "🟣 SOL",
+                Chain.ETHEREUM: "⚪ ETH", Chain.BASE: "🔵 BASE", Chain.BNB: "🟡 BNB"}
+
+
+def _chain_badge(chain) -> str:
+    return _CHAIN_BADGE.get(chain, f"• {getattr(chain, 'value', chain)}")
 
 
 def format_screen_html(scr: Screen, signature_precision: Optional[float] = None) -> str:
     s = scr.snapshot
-    emoji = _CHAIN_EMOJI.get(s.chain, "•")
     conf = f" · sig P={signature_precision:.0%}" if signature_precision else ""
     lines = [
         f"🎯 <b>memelab match {scr.score:.0f}/100</b>{conf}",
-        f"{emoji} {s.chain.value} · <b>${escape(s.symbol or '???')}</b>",
+        f"{_chain_badge(s.chain)} · <b>${escape(s.symbol or '???')}</b>",
         f"MCAP: {_usd(s.market_cap_usd)} | Liq: {_usd(s.liquidity_usd)} | "
         f"Age: {_age(s.age_minutes)}",
         f"CA: <code>{escape(s.token_address)}</code>",   # tap-to-copy
@@ -44,10 +49,9 @@ def format_screen_html(scr: Screen, signature_precision: Optional[float] = None)
 
 def format_kol_html(chain, kol_name: str, symbol: str, token: str) -> str:
     """A tagged KOL/influencer wallet bought a token — attention incoming."""
-    emoji = _CHAIN_EMOJI.get(chain, "•")
     return "\n".join([
         f"📣 <b>KOL BUY</b> — {escape(kol_name)}",
-        f"{emoji} {chain.value} · <b>${escape(symbol or '???')}</b>",
+        f"{_chain_badge(chain)} · <b>${escape(symbol or '???')}</b>",
         f"CA: <code>{escape(token)}</code>",
         f'<a href="https://dexscreener.com/{chain.value}/{escape(token)}">Chart</a>',
         "<i>An influencer wallet just aped — attention/volume often follows.</i>",
@@ -56,10 +60,9 @@ def format_kol_html(chain, kol_name: str, symbol: str, token: str) -> str:
 
 def format_core_alpha_html(chain, symbol: str, token: str, label: str) -> str:
     """A single proven multi-winner wallet bought a token — strong on its own."""
-    emoji = _CHAIN_EMOJI.get(chain, "•")
     return "\n".join([
         f"💎 <b>CORE ALPHA BUY</b> — {escape(label)}",
-        f"{emoji} {chain.value} · <b>${escape(symbol or '???')}</b>",
+        f"{_chain_badge(chain)} · <b>${escape(symbol or '???')}</b>",
         f"CA: <code>{escape(token)}</code>",
         f'<a href="https://dexscreener.com/{chain.value}/{escape(token)}">Chart</a>',
         "<i>A wallet with a proven multi-winner track record just aped in.</i>",

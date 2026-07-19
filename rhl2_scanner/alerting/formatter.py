@@ -28,6 +28,17 @@ _LEVEL_HEADER = {
     AlertLevel.SKIP: "⏭️ SKIP",
 }
 
+# Colored chain badge for the unified multi-chain feed (⚪ = grey stand-in; no
+# true grey circle emoji exists).
+_CHAIN_BADGE = {
+    "robinhood": "🟢 RH", "solana": "🟣 SOL", "ethereum": "⚪ ETH",
+    "base": "🔵 BASE", "bsc": "🟡 BNB",
+}
+
+
+def _chain_badge(snap: TokenSnapshot) -> str:
+    return _CHAIN_BADGE.get((snap.chain or "").lower(), "")
+
 
 def _usd(x: float | None) -> str:
     if x is None:
@@ -262,7 +273,9 @@ def format_early_launch_html(snap: TokenSnapshot, result: ScoreResult) -> str:
     header = "🌱 EARLY LAUNCH"
     if snap.launchpad:
         header += f" · {escape(snap.launchpad)}"
-    lines = [f"<b>{header} — ${escape(snap.symbol or '???')}</b>"]
+    badge = _chain_badge(snap)
+    prefix = f"{badge} · " if badge else ""
+    lines = [f"{prefix}<b>{header} — ${escape(snap.symbol or '???')}</b>"]
     conv = _conviction_line(snap)
     if conv:
         lines.append(conv)
@@ -304,7 +317,9 @@ def to_telegram_html(snap: TokenSnapshot, result: ScoreResult) -> str:
     """Rich, scannable Telegram alert (maturity tier)."""
     sym = escape(snap.symbol or "???")
     header = _LEVEL_HEADER.get(result.level, "ALERT")
-    lines = [f"<b>{header} — ${sym}</b>  ·  {result.composite:.0f}/100"]
+    badge = _chain_badge(snap)
+    prefix = f"{badge} · " if badge else ""
+    lines = [f"{prefix}<b>{header} — ${sym}</b>  ·  {result.composite:.0f}/100"]
 
     conv = _conviction_line(snap)
     if conv:

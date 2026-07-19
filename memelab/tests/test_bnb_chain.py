@@ -28,11 +28,10 @@ class TestBnbChain(unittest.TestCase):
         vals = {c.value for c in Chain}
         self.assertEqual(vals, {"robinhood", "solana", "ethereum", "base", "bsc"})
 
-    def test_chain_emoji_and_alert_format(self):
+    def test_chain_badge_in_alert(self):
         from memelab.alerting import format_core_alpha_html
         html = format_core_alpha_html(Chain.BNB, "GEM", "0xabc", "0x1234…")
-        self.assertIn("bsc", html)
-        self.assertIn("🟡", html)                     # BNB emoji
+        self.assertIn("🟡 BNB", html)                 # colored badge + short name
 
 
 if __name__ == "__main__":
