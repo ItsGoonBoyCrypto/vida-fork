@@ -39,15 +39,22 @@ async def _collect(chains: list, db: str) -> None:
     session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
     adapters = {c: get_adapter(c, session=session) for c in chains}
     feed = DexScreenerFeed(session=session)
+    # One unified feed: fall back to the RH scanner's bot/channel when memelab's
+    # own aren't set, so scanner + memelab alerts land in the same Telegram chat.
     alerter = TelegramAlerter(
-        token=os.environ.get("MEMELAB_TELEGRAM_TOKEN", ""),
-        chat_id=os.environ.get("MEMELAB_TELEGRAM_CHAT", ""),
+        token=os.environ.get("MEMELAB_TELEGRAM_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+        chat_id=os.environ.get("MEMELAB_TELEGRAM_CHAT") or os.environ.get("TELEGRAM_ALERT_CHAT_ID", ""),
         session=session)
     from .smartmoney import SmartMoney
     from .ingest.social import SocialFeed
     smart = SmartMoney(store, session=session)
     social = SocialFeed(api_key=os.environ.get("MEMELAB_LUNARCRUSH_KEY", ""), session=session)
-    collector = Collector(CollectorConfig(chains=chains), store, adapters, feed,
+    # Which chains memelab ALERTS on. Default = all collected; but if the scanner
+    # is also running (combined deploy), it owns robinhood — set via env there.
+    alert_env = os.environ.get("MEMELAB_ALERT_CHAINS", "")
+    alert_chains = [Chain(c.strip()) for c in alert_env.split(",") if c.strip()] if alert_env else []
+    collector = Collector(CollectorConfig(chains=chains, alert_chains=alert_chains),
+                          store, adapters, feed,
                           alerter=alerter, smart_money=smart, social=social)
     logging.info("memelab collecting on %s (alerts=%s)",
                  [c.value for c in chains], "on" if alerter.enabled else "stdout")

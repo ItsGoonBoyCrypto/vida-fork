@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .models import Chain, TokenSnapshot
 from .storage import Store
@@ -42,6 +42,10 @@ class CollectorConfig:
     win_multiple: float = 3.0
     # Alerting + autonomous backtest
     alert_enabled: bool = True
+    # Chains to ALERT on (empty = all collected). In the combined deploy the RH
+    # scanner owns robinhood, so memelab alerts only on the other chains — one
+    # unified feed, no double alerts. memelab still COLLECTS every chain to learn.
+    alert_chains: list = field(default_factory=list)
     min_alert_score: float = 65.0      # floor; screener also gates on signature precision
     backtest_interval_min: float = 360.0  # re-derive the signature every 6h
     # Ops
@@ -155,6 +159,10 @@ class Collector:
         buyer fires on its own (bypassing the score floor); a toxic buyer
         (repeat-rugger) suppresses the alert."""
         if not self.cfg.alert_enabled:
+            return
+        # In the combined deploy the RH scanner owns robinhood alerts — memelab
+        # alerts only on its chains so the shared feed has no duplicates.
+        if self.cfg.alert_chains and chain not in self.cfg.alert_chains:
             return
         ts = self.store.time_series(chain, token_address)
         if not ts.snapshots:

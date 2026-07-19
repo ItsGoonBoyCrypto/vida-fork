@@ -81,6 +81,14 @@ async def main() -> None:
         db_dir = os.environ.get("RHL2_DB_DIR", "/app/data")
         os.environ["SCANNER_DB"] = os.path.join(db_dir, "scanner.db")
 
+    scanner_on = os.environ.get("RUN_SCANNER", "1") != "0"
+    memelab_on = os.environ.get("RUN_MEMELAB", "1") != "0"
+    # ONE unified alert feed. memelab inherits the scanner's Telegram bot/channel
+    # (via TELEGRAM_* fallback in _collect). To avoid double alerts on robinhood,
+    # the scanner owns robinhood and memelab alerts only on the other chains.
+    if scanner_on and memelab_on and "MEMELAB_ALERT_CHAINS" not in os.environ:
+        os.environ["MEMELAB_ALERT_CHAINS"] = "solana,ethereum,base"
+
     parts = []
     if os.environ.get("RUN_SCANNER", "1") != "0":
         parts.append(_supervise("scanner", _run_scanner))
