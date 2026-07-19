@@ -204,6 +204,15 @@ CREATE TABLE IF NOT EXISTS deployer_tokens (
     PRIMARY KEY (deployer, token)
 );
 CREATE INDEX IF NOT EXISTS idx_deployer_tokens_d ON deployer_tokens(deployer);
+
+-- Known honeypot deployers: a wallet that shipped a can't-sell trap. Its FUTURE
+-- launches get flagged/gated pre-emptively (serial-scammer blocklist).
+CREATE TABLE IF NOT EXISTS honeypot_deployers (
+    deployer   TEXT PRIMARY KEY,   -- lowercased creator address
+    count      INTEGER DEFAULT 1,  -- distinct honeypots shipped
+    last_token TEXT,
+    ts         REAL NOT NULL
+);
 """
 
 
@@ -556,6 +565,35 @@ class Storage:
             "SELECT wallet FROM wallet_rugs GROUP BY wallet HAVING COUNT(*) >= ?",
             (min_rugs,))
         return {r["wallet"] for r in cur.fetchall()}
+
+    def record_honeypot_deployer(self, deployer: str, token: str) -> int:
+        """Record a honeypot's deployer; bumps the count. Returns new count."""
+        d = deployer.lower()
+        self._conn.execute(
+            "INSERT INTO honeypot_deployers (deployer, count, last_token, ts) "
+            "VALUES (?, 1, ?, ?) ON CONFLICT(deployer) DO UPDATE SET "
+            "count = count + 1, last_token = excluded.last_token, ts = excluded.ts",
+            (d, token.lower(), time.time()))
+        self._conn.commit()
+        row = self._conn.execute(
+            "SELECT count FROM honeypot_deployers WHERE deployer = ?", (d,)).fetchone()
+        return int(row["count"]) if row else 1
+
+    def is_honeypot_deployer(self, deployer: str) -> int:
+        """How many honeypots this deployer has shipped (0 = not known)."""
+        if not deployer:
+            return 0
+        row = self._conn.execute(
+            "SELECT count FROM honeypot_deployers WHERE deployer = ?",
+            (deployer.lower(),)).fetchone()
+        return int(row["count"]) if row else 0
+
+    def honeypot_deployers(self, limit: int = 20) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT deployer, count, last_token FROM honeypot_deployers "
+            "ORDER BY count DESC, ts DESC LIMIT ?", (limit,)).fetchall()
+        return [{"deployer": r["deployer"], "count": r["count"],
+                 "last_token": r["last_token"]} for r in rows]
 
     def deployer_reputation(self, deployer: str) -> dict:
         row = self._conn.execute(

@@ -392,6 +392,15 @@ class RuntimeConfig:
     # the verdict into the alert. One extra explorer call per alert (infrequent).
     contract_audit_on_alert: bool = True
 
+    # --- Honeypot warning + serial-scammer blocklist ---
+    # A confirmed can't-sell trap normally just fails the gate and vanishes. When
+    # it's an INTERESTING token (smart money in / already alerted / would-score),
+    # fire a 🍯 warning instead of silently skipping, and record its deployer so
+    # that scammer's FUTURE launches are flagged pre-emptively.
+    honeypot_alert_enabled: bool = True
+    honeypot_sell_tax_pct: float = 50.0    # sell tax at/above this = effective trap
+    honeypot_probe_deployer: bool = True   # resolve+check the deployer (1 explorer call)
+
     # --- Early-launch alerts (catch runners pre/just-after graduation) ---
     # Fresh tokens have few holders + concentrated supply + little volume, so
     # they can't reach the maturity-based score. This path alerts on a SAFE,

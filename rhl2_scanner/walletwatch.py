@@ -191,6 +191,23 @@ def format_cluster_html(symbol: str, token: str, labels: list[str],
     return "\n".join(lines)
 
 
+def format_honeypot_html(symbol: str, token: str, reason: str,
+                         deployer_hits: int = 0, chart_url: str = "") -> str:
+    """Defensive alert: an interesting token is a can't-sell trap."""
+    from html import escape
+    lines = [
+        f"🍯 <b>HONEYPOT WARNING</b> — ${escape(symbol or '???')}",
+        escape(reason),
+        f"CA: <code>{escape(token)}</code>",
+    ]
+    if deployer_hits >= 2:
+        lines.append(f"🚫 Deployer has shipped <b>{deployer_hits}</b> honeypots — serial scammer.")
+    lines.append("<i>Do NOT buy — you likely can't sell. Logged the deployer.</i>")
+    if chart_url:
+        lines.append(f'<a href="{escape(chart_url)}">Chart</a>')
+    return "\n".join(lines)
+
+
 def format_kol_html(kol_name: str, symbol: str, token: str, chart_url: str = "") -> str:
     """A tagged KOL/influencer wallet bought a token — attention incoming."""
     from html import escape

@@ -54,6 +54,7 @@ from .walletwatch import (
     format_core_alpha_html,
     format_dump_html,
     format_exit_html,
+    format_honeypot_html,
     format_kol_html,
     format_milestone_html,
     format_top_zone_html,
@@ -1427,6 +1428,7 @@ class Scanner:
             "toxic so tokens they buy get demoted",
             "<code>/alpha</code> — top wallets by winner-overlap (⭐ = core-alpha)",
             "<code>/deployers</code> — deployer win-rates (direct-deploy tokens)",
+            "<code>/honeypots</code> — known honeypot deployers (serial-scammer blocklist)",
             "<code>/narratives</code> — which meta is printing (hit-rate by narrative)",
             "<code>/kol 0xWallet Name</code> — tag an influencer wallet (📣 on its buys)",
             "<code>/calibrate 0xCA1 0xCA2 …</code> — tune thresholds against your known winners",
@@ -1708,6 +1710,17 @@ class Scanner:
             await self._send_html(
                 f"📣 Tagged <code>{w}</code> as KOL <b>{__import__('html').escape(name)}</b> — "
                 "its buys now fire a dedicated alert.")
+        elif cmd in ("honeypots", "traps", "scammers"):
+            hps = self.storage.honeypot_deployers()
+            if not hps:
+                await self._send_html("🍯 No honeypot deployers logged yet — builds "
+                                      "as 🍯 warnings fire on trap tokens.")
+                return
+            lines = ["🍯 <b>Known honeypot deployers</b> (their next launch is flagged)"]
+            for h in hps:
+                lines.append(f"<code>{h['deployer'][:8]}…{h['deployer'][-4:]}</code> — "
+                             f"<b>{h['count']}</b> trap(s)")
+            await self._send_html("\n".join(lines))
         elif cmd in ("deployers", "creators"):
             devs = self.storage._conn.execute(
                 "SELECT deployer, "
@@ -2376,6 +2389,59 @@ class Scanner:
             except Exception:  # noqa: BLE001
                 log.debug("alert-time contract audit failed", exc_info=True)
 
+    async def _check_honeypot(self, snap: TokenSnapshot, result: ScoreResult) -> bool:
+        """Fire a 🍯 warning for an INTERESTING can't-sell trap (instead of the
+        silent gate-skip), and record its deployer so the scammer's next launch is
+        flagged. Returns True if a warning fired. Gated on interest to avoid
+        warning on every one of the chain's countless scam tokens."""
+        rc = self.cfg.runtime
+        s = snap.safety
+        sell_tax = s.sell_tax_pct
+        is_hp = (s.is_honeypot is True) or \
+                (sell_tax is not None and sell_tax >= rc.honeypot_sell_tax_pct)
+
+        # Interest gate (cheap): smart money in, already alerted, or would-be score.
+        interesting = bool(snap.smart_money_wallets) \
+            or self.storage.alert_rank(snap.pair_address) >= 0
+        if not interesting:
+            would = sum(c.weighted for c in result.categories)
+            interesting = would >= self.cfg.thresholds.watch_alert_score
+        if not interesting:
+            return False
+
+        # Resolve the deployer once (skip shared launchpad managers) to both check
+        # the serial-scammer blocklist and record a newly-found honeypot deployer.
+        deployer, dep_hits = "", 0
+        if rc.honeypot_probe_deployer:
+            try:
+                creator = await self._creator_of(snap.token_address)
+                if creator and creator not in self.cfg.known_launchpad_addresses():
+                    deployer = creator
+                    dep_hits = self.storage.is_honeypot_deployer(deployer)
+            except Exception:  # noqa: BLE001
+                pass
+
+        if not is_hp and dep_hits < 1:
+            return False
+        if not self.storage.pos_event_new("honeypot|" + snap.token_address.lower()):
+            return False
+
+        if is_hp and deployer:
+            dep_hits = self.storage.record_honeypot_deployer(deployer, snap.token_address)
+
+        if s.is_honeypot is True:
+            reason = "Can't-sell honeypot confirmed (sell simulation failed)."
+        elif sell_tax is not None and sell_tax >= rc.honeypot_sell_tax_pct:
+            reason = f"Sell tax {sell_tax:.0f}% — effectively a trap."
+        else:
+            reason = "Deployer is a known serial honeypot scammer."
+        chart = f"https://dexscreener.com/{self.cfg.chain.dexscreener_chain}/{snap.pair_address}" \
+            if snap.pair_address else ""
+        await self._send_html(format_honeypot_html(
+            snap.symbol, snap.token_address, reason, dep_hits, chart))
+        log.info("HONEYPOT %s (%s) deployer_hits=%d", snap.symbol, reason, dep_hits)
+        return True
+
     async def _process(self, snap: TokenSnapshot) -> Optional[ScoreResult]:
         async with self._sem:
             await self._enrich(snap)
@@ -2412,6 +2478,15 @@ class Scanner:
             return result   # /zero'd — suppress all alerts for this token
         if is_blocked_symbol(snap, self._blocked_symbols()):
             return result   # scam-impersonator symbol ($ROBINHOOD clones) — never alert
+
+        # Defensive honeypot warning: an interesting can't-sell trap fires a 🍯
+        # alert (+ logs the deployer) instead of vanishing silently at the gate.
+        if self.cfg.runtime.honeypot_alert_enabled:
+            try:
+                if await self._check_honeypot(snap, result):
+                    return result   # warned — don't also emit a normal alert
+            except Exception:  # noqa: BLE001
+                log.debug("honeypot check failed", exc_info=True)
 
         # Determine this cycle's alert tier: strong(2) > watch(1) > early(0).
         # A token that ESCALATES past the tier it was last alerted at gets an
