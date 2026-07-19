@@ -238,6 +238,17 @@ runtime:
   paper_digest_enabled: true
   paper_digest_interval_hours: 1      # hourly while ramping up; raise to 24 later
   paper_digest_win_multiple: 2.0
+  # --- Bounded auto-tune of scoring weights (opt-in: RHL2_AUTOTUNE=1) ---
+  # Once enough alerts have SETTLED, nudge the category weights toward the signal
+  # that actually separated winners from rugs (see /perf "By signal"). Tight
+  # leash: dormant until min_settled, tiny steps, hard-clamped to baseline ±
+  # max_drift, fully reversible with `/autotune reset`.
+  autotune_enabled: false
+  autotune_min_settled: 30            # dormant until this many alerts have settled
+  autotune_min_bucket: 5             # min samples in a high/low bucket for its edge to count
+  autotune_step: 0.02                # max weight move per run (pre-clamp)
+  autotune_max_drift: 0.08           # a weight can never leave baseline ± this
+  autotune_interval_hours: 24        # how often to re-tune
   send_startup_message: true          # posts a "scanner online" msg on each boot
 
 telegram:

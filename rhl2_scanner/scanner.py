@@ -151,6 +151,14 @@ class Scanner:
         # Merge any persisted smart-money wallets (from prior /smart or autoseed)
         # into the config set so they take effect this run.
         self._merge_persisted_smart_wallets()
+        # Bounded auto-tune: remember the config weights as the immovable baseline,
+        # then apply any persisted tuned override on top (reversible via /autotune).
+        self._weights_baseline = {
+            "safety": cfg.weights.safety, "distribution": cfg.weights.distribution,
+            "momentum": cfg.weights.momentum, "discovery": cfg.weights.discovery,
+        }
+        self._last_autotune_ts: Optional[float] = None
+        self._apply_weight_override()
 
     # -- lifecycle -------------------------------------------------------
 
@@ -1318,6 +1326,8 @@ class Scanner:
             "<code>/curveprobe 0xToken [fn]</code> — raw getter probe (fallback; add a fn name "
             "for a single rate-limit-proof call)",
             "<code>/calibrate 0xCA1 0xCA2 …</code> — tune thresholds against your known winners",
+            "<code>/autotune [run|reset]</code> — bounded auto-tuned scoring weights "
+            "(view state, force a run, or revert to baseline)",
             "",
             "<i>Alerts you'll get: 🚨 Gem / 👀 Watch / 🌱 Early · 🔼 Upgrades · "
             "🧠🚨 Smart-money clusters · 📈 Milestones (Nx) · ⚠️ Dumps · "
@@ -1439,6 +1449,28 @@ class Scanner:
                 return
             await self._send_html(
                 format_digest_html(rep, win, title="Alert Performance", noun="alerts"))
+        elif cmd in ("autotune", "weights"):
+            from html import escape as _esc
+            from . import autotune as _at
+            arg = parts[1].lower() if len(parts) > 1 else ""
+            if arg == "reset":
+                _at.reset(self.storage)
+                self._apply_weight_override()   # no override now → reload does nothing, but
+                for k, v in self._weights_baseline.items():   # snap live weights back to baseline
+                    setattr(self.cfg.weights, k, v)
+                await self._send_html("🔧 Auto-tune <b>reset</b> — weights back to baseline.")
+                return
+            if arg in ("run", "now"):
+                self._last_autotune_ts = None
+                await self._maybe_autotune()
+            rc = self.cfg.runtime
+            state = _at.describe(self.storage, self._weights_baseline)
+            gate = ("on" if rc.autotune_enabled else "off (RHL2_AUTOTUNE=1 to enable)")
+            await self._send_html(
+                "🔧 <b>Scoring weights</b>\n"
+                f"{_esc(state)}\n"
+                f"<i>auto-tune {gate}; dormant until {rc.autotune_min_settled} settled. "
+                f"/autotune reset to revert.</i>")
         elif cmd == "block":
             from .filters import _norm_symbol
             sym = _norm_symbol(parts[1]) if len(parts) > 1 else ""
@@ -1895,7 +1927,52 @@ class Scanner:
                 except Exception:
                     log.exception("winner harvest failed")
 
+        # Bounded auto-tune of scoring weights (periodic, dormant until settled).
+        await self._maybe_autotune()
+
         return [r for r in results if isinstance(r, ScoreResult)]
+
+    def _apply_weight_override(self) -> None:
+        """Load a persisted auto-tuned weight set (if any) onto the live config."""
+        try:
+            from .autotune import load_override
+            w = load_override(self.storage)
+        except Exception:  # noqa: BLE001
+            w = None
+        if not w:
+            return
+        for k in ("safety", "distribution", "momentum", "discovery"):
+            if k in w:
+                setattr(self.cfg.weights, k, float(w[k]))
+        log.info("autotune: applied persisted weights %s", w)
+
+    async def _maybe_autotune(self) -> None:
+        """Periodically re-tune scoring weights off settled-alert performance."""
+        rc = self.cfg.runtime
+        if not rc.autotune_enabled or self.perf is None:
+            return
+        now = time.time()
+        interval = max(0.1, rc.autotune_interval_hours) * 3600.0
+        if self._last_autotune_ts is not None and (now - self._last_autotune_ts) < interval:
+            return
+        self._last_autotune_ts = now
+        try:
+            from .autotune import apply, propose_weights
+            rep = self.perf.report(win_multiple=rc.paper_digest_win_multiple)
+            current = {
+                "safety": self.cfg.weights.safety, "distribution": self.cfg.weights.distribution,
+                "momentum": self.cfg.weights.momentum, "discovery": self.cfg.weights.discovery,
+            }
+            result = propose_weights(
+                rep, self._weights_baseline, current,
+                min_settled=rc.autotune_min_settled, min_bucket=rc.autotune_min_bucket,
+                step=rc.autotune_step, max_drift=rc.autotune_max_drift,
+            )
+            if result.get("changed") and apply(self.storage, result):
+                self._apply_weight_override()
+                log.info("autotune: %s", result.get("reason"))
+        except Exception:  # noqa: BLE001
+            log.exception("autotune failed")
 
     def _active_mm_signature(self) -> Optional[dict]:
         """memelab's learned signature (cached hourly). None until it's trained —

@@ -417,6 +417,18 @@ class RuntimeConfig:
     paper_digest_enabled: bool = False
     paper_digest_interval_hours: float = 24.0  # how often to post (e.g. 1 = hourly)
     paper_digest_win_multiple: float = 2.0
+    # --- Bounded auto-tune of scoring weights ---
+    # Once enough alerts have settled, nudge the category weights toward the
+    # signals that actually separated winners from rugs (see autotune.py). Tight
+    # leash: dormant until min_settled, small steps, hard-clamped to
+    # baseline ± max_drift, and fully reversible (/autotune reset). Opt-in.
+    autotune_enabled: bool = False
+    autotune_min_settled: int = 30             # dormant until this many alerts have settled
+    autotune_min_bucket: int = 5               # min samples in a high/low bucket for its edge to count
+    autotune_step: float = 0.02                # max weight move per run (pre-clamp)
+    autotune_max_drift: float = 0.08           # a weight can never leave baseline ± this
+    autotune_interval_hours: float = 24.0      # how often to re-tune
+
     # Post a "scanner online" message on startup (also serves as a wiring test).
     send_startup_message: bool = True
     # Live alerts on a chain without a tax oracle (no GoPlus coverage, no DEX
@@ -618,6 +630,8 @@ class Config:
             self.runtime.smart_money_autoseed = v.lower() in ("1", "true", "yes")
         if v := env.get("RHL2_WINNER_HARVEST"):
             self.runtime.winner_harvest_enabled = v.lower() in ("1", "true", "yes")
+        if v := env.get("RHL2_AUTOTUNE"):
+            self.runtime.autotune_enabled = v.lower() in ("1", "true", "yes")
         # Extra scam symbols to block, comma-separated (unioned with the default
         # ROBINHOOD so it's always blocked).
         if v := env.get("RHL2_BLOCKED_SYMBOLS"):
