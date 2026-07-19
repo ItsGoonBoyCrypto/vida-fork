@@ -151,11 +151,28 @@ class Collector:
         return since_min >= interval
 
     async def _maybe_alert(self, chain: Chain, token_address: str) -> None:
-        """Screen the token against the signature; alert once if it scores high."""
-        if not self.cfg.alert_enabled or not self.screener.ready():
+        """Screen the token; alert once if it scores high. A proven core-alpha
+        buyer fires on its own (bypassing the score floor); a toxic buyer
+        (repeat-rugger) suppresses the alert."""
+        if not self.cfg.alert_enabled:
             return
         ts = self.store.time_series(chain, token_address)
         if not ts.snapshots:
+            return
+        last = ts.snapshots[-1]
+
+        # Core-alpha: a single proven multi-winner wallet is signal on its own.
+        if getattr(last, "core_alpha_buyer", "") and not last.toxic_buyer \
+                and self.store.marker_new(f"corealpha|{chain.value}|{token_address.lower()}"):
+            from .alerting import format_core_alpha_html
+            await self.alerter.send(format_core_alpha_html(
+                chain, last.symbol or "?", token_address, last.core_alpha_buyer))
+            log.info("CORE-ALPHA %s $%s (%s)", chain.value, last.symbol, last.core_alpha_buyer)
+
+        if not self.screener.ready():
+            return
+        # Toxic demotion: a repeat-rugger among the buyers suppresses the alert.
+        if last.toxic_buyer:
             return
         scr = self.screener.screen(chain, token_address, ts.snapshots)
         floor = max(self.cfg.min_alert_score, self.screener.min_confident_score())
@@ -246,10 +263,23 @@ class Collector:
             log.info("relabel: %s", counts)
         except Exception:
             log.exception("relabel failed")
-        # Harvest confirmed winners' early buyers into the smart-money set.
+        # Harvest confirmed winners' early buyers into the smart-money set, and
+        # confirmed rugs' early buyers toward toxicity. Label EVM deployers so
+        # per-creator win-rates build (skip RH/Solana: flap shares a manager,
+        # Solana has no cheap creator lookup).
         if self.smart_money is not None:
+            from .models import Chain as _Chain
             for chain, token in self.store.winner_tokens():
                 try:
                     await self.smart_money.harvest_winner(chain, token)
+                    if chain in (_Chain.BASE, _Chain.ETHEREUM):
+                        await self.smart_money.label_deployer(chain, token, "winner")
                 except Exception:
                     log.debug("harvest %s failed", token, exc_info=True)
+            for chain, token in self.store.rug_tokens():
+                try:
+                    await self.smart_money.harvest_rug(chain, token)
+                    if chain in (_Chain.BASE, _Chain.ETHEREUM):
+                        await self.smart_money.label_deployer(chain, token, "rug")
+                except Exception:
+                    log.debug("rug harvest %s failed", token, exc_info=True)

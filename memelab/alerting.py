@@ -42,6 +42,18 @@ def format_screen_html(scr: Screen, signature_precision: Optional[float] = None)
     return "\n".join(lines)
 
 
+def format_core_alpha_html(chain, symbol: str, token: str, label: str) -> str:
+    """A single proven multi-winner wallet bought a token — strong on its own."""
+    emoji = _CHAIN_EMOJI.get(chain, "•")
+    return "\n".join([
+        f"💎 <b>CORE ALPHA BUY</b> — {escape(label)}",
+        f"{emoji} {chain.value} · <b>${escape(symbol or '???')}</b>",
+        f"CA: <code>{escape(token)}</code>",
+        f'<a href="https://dexscreener.com/{chain.value}/{escape(token)}">Chart</a>',
+        "<i>A wallet with a proven multi-winner track record just aped in.</i>",
+    ])
+
+
 def _social_links(socials: dict):
     """Extract X (Twitter) + Telegram + website links from DexScreener socials."""
     out = []

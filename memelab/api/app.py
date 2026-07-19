@@ -71,6 +71,25 @@ def create_app(db: str = "memelab.db"):
         return {"items": store.smart_wallets_detailed(),
                 "locked": bool(os.environ.get("MEMELAB_ADMIN_KEY"))}
 
+    @api.get("/reputation")
+    def reputation(chain: str | None = Query(default=None), limit: int = 15):
+        """Top wallets by winner-overlap + whether smart_money_quality is being
+        used by the active signature yet — the panel for watching it 'cook'."""
+        ch = Chain(chain) if chain else None
+        raw = store.active_signature()
+        in_signature = False
+        if raw:
+            try:
+                sig = signature_from_json(raw)
+                in_signature = any(r.get("feature") == "smart_money_quality"
+                                   for r in (sig.rules or []))
+            except Exception:  # noqa: BLE001
+                in_signature = False
+        return {"top": store.top_reputation_wallets(ch, limit),
+                "deployers": store.top_deployers(limit),
+                "summary": store.reputation_summary(),
+                "quality_in_signature": in_signature}
+
     @api.post("/smart-wallets")
     def smart_wallets_add(payload: dict = Body(default={}),
                           x_admin_key: str = Header(default="")):

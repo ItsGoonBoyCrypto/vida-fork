@@ -63,6 +63,15 @@ class TestDashboardAsset(unittest.TestCase):
         self.assertIn("harvestWinner", html)
         self.assertIn("fetch('harvest'", html)     # posts to the /harvest endpoint
 
+    def test_dashboard_has_reputation_ui(self):
+        here = os.path.join(os.path.dirname(__file__), "..", "api", "dashboard.html")
+        with open(here, encoding="utf-8") as fh:
+            html = fh.read()
+        self.assertIn("Wallet reputation", html)
+        self.assertIn("loadReputation", html)
+        self.assertIn("j('reputation')", html)
+        self.assertIn("Deployers by win-rate", html)
+
 
 class TestApiRoutes(unittest.TestCase):
     def test_harvest_route_registered(self):
@@ -74,6 +83,7 @@ class TestApiRoutes(unittest.TestCase):
         paths = {getattr(r, "path", None) for r in app.routes}
         self.assertIn("/harvest", paths)
         self.assertIn("/smart-wallets", paths)
+        self.assertIn("/reputation", paths)
 
 
 if __name__ == "__main__":

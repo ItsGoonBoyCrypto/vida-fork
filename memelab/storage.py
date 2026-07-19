@@ -102,6 +102,34 @@ CREATE TABLE IF NOT EXISTS smart_buys (
     PRIMARY KEY (chain, wallet, token)
 );
 CREATE INDEX IF NOT EXISTS idx_ml_sb ON smart_buys(chain, wallet);
+
+-- Every (wallet, rug-token) it was early in; DISTINCT count = toxicity.
+CREATE TABLE IF NOT EXISTS wallet_rugs (
+    chain   TEXT NOT NULL,
+    wallet  TEXT NOT NULL,
+    token   TEXT NOT NULL,
+    ts      REAL NOT NULL,
+    PRIMARY KEY (chain, wallet, token)
+);
+CREATE INDEX IF NOT EXISTS idx_ml_wr ON wallet_rugs(chain, wallet);
+
+-- Deployers of confirmed winners/rugs → per-creator win-rate (EVM only; Solana
+-- has no cheap creator lookup). Known launchpad managers are excluded upstream.
+CREATE TABLE IF NOT EXISTS deployer_tokens (
+    chain     TEXT NOT NULL,
+    deployer  TEXT NOT NULL,
+    token     TEXT NOT NULL,
+    outcome   TEXT,
+    ts        REAL NOT NULL,
+    PRIMARY KEY (chain, deployer, token)
+);
+CREATE INDEX IF NOT EXISTS idx_ml_dt ON deployer_tokens(chain, deployer);
+
+-- One-shot markers for rug-harvest dedup + core-alpha alerts.
+CREATE TABLE IF NOT EXISTS ml_markers (
+    key  TEXT PRIMARY KEY,
+    ts   REAL NOT NULL
+);
 """
 
 
@@ -404,6 +432,102 @@ class Store:
             out[r["wallet"]]["pick_wins"] = r["wins"] or 0
             out[r["wallet"]]["pick_total"] = r["total"] or 0
         return out
+
+    def record_wallet_rug(self, chain: Chain, wallet: str, token: str) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO wallet_rugs (chain, wallet, token, ts) VALUES (?,?,?,?)",
+            (chain.value, wallet.lower(), token.lower(), time.time()))
+        self._conn.commit()
+
+    def toxic_wallets(self, chain: Chain, min_rugs: int = 2) -> set:
+        """Wallets in >= min_rugs rugs whose rug count outweighs their winner
+        overlap (a genuine sharp who once aped a rug is not blacklisted)."""
+        rows = self._conn.execute(
+            "SELECT r.wallet AS wallet, COUNT(DISTINCT r.token) rugs, "
+            "  (SELECT COUNT(DISTINCT w.token) FROM wallet_winners w "
+            "   WHERE w.chain = r.chain AND w.wallet = r.wallet) wins "
+            "FROM wallet_rugs r WHERE r.chain = ? GROUP BY r.wallet",
+            (chain.value,)).fetchall()
+        return {r["wallet"] for r in rows
+                if r["rugs"] >= min_rugs and (r["rugs"] - (r["wins"] or 0)) > 0}
+
+    def rug_tokens(self) -> list:
+        """(Chain, token) for every token currently labeled RUG."""
+        cur = self._conn.execute(
+            "SELECT chain, token_address FROM tokens WHERE outcome = 'rug'")
+        return [(Chain(r["chain"]), r["token_address"]) for r in cur.fetchall()]
+
+    def core_alpha_wallets(self, chain: Chain, min_overlap: int) -> set:
+        cur = self._conn.execute(
+            "SELECT wallet FROM wallet_winners WHERE chain = ? "
+            "GROUP BY wallet HAVING COUNT(*) >= ?", (chain.value, min_overlap))
+        return {r["wallet"] for r in cur.fetchall()}
+
+    def record_deployer_token(self, chain: Chain, deployer: str, token: str,
+                              outcome: str) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO deployer_tokens (chain, deployer, token, outcome, ts) "
+            "VALUES (?,?,?,?,?)",
+            (chain.value, deployer.lower(), token.lower(), outcome, time.time()))
+        self._conn.commit()
+
+    def top_deployers(self, limit: int = 15) -> list:
+        rows = self._conn.execute(
+            "SELECT chain, deployer, "
+            "SUM(CASE WHEN outcome='winner' THEN 1 ELSE 0 END) wins, "
+            "SUM(CASE WHEN outcome='rug' THEN 1 ELSE 0 END) rugs, COUNT(*) total "
+            "FROM deployer_tokens GROUP BY chain, deployer "
+            "ORDER BY wins DESC, total DESC LIMIT ?", (limit,)).fetchall()
+        return [{"chain": r["chain"], "deployer": r["deployer"], "wins": r["wins"],
+                 "rugs": r["rugs"], "total": r["total"]} for r in rows]
+
+    def marker_new(self, key: str) -> bool:
+        """True (and records) if this one-shot key hasn't been seen."""
+        if self._conn.execute("SELECT 1 FROM ml_markers WHERE key = ?", (key,)).fetchone():
+            return False
+        self._conn.execute("INSERT INTO ml_markers (key, ts) VALUES (?, ?)",
+                           (key, time.time()))
+        self._conn.commit()
+        return True
+
+    def top_reputation_wallets(self, chain: Optional[Chain] = None,
+                               limit: int = 15) -> list:
+        """Wallets ranked by winner-overlap (+ forward-pick record) — the data
+        behind the smart_money_quality feature, for the dashboard panel."""
+        q = ("SELECT chain, wallet, COUNT(*) n, MAX(mult) best "
+             "FROM wallet_winners")
+        args: list = []
+        if chain:
+            q += " WHERE chain = ?"
+            args.append(chain.value)
+        q += " GROUP BY chain, wallet ORDER BY n DESC, best DESC LIMIT ?"
+        args.append(limit)
+        out = []
+        for r in self._conn.execute(q, args).fetchall():
+            fwd = self._conn.execute(
+                "SELECT SUM(CASE WHEN t.peak_multiple >= 2.0 THEN 1 ELSE 0 END) wins, "
+                "SUM(CASE WHEN t.outcome IN ('winner','rug','neutral') THEN 1 ELSE 0 END) total "
+                "FROM smart_buys sb JOIN tokens t "
+                "  ON t.chain = sb.chain AND t.token_address = sb.token "
+                "WHERE sb.chain = ? AND sb.wallet = ?",
+                (r["chain"], r["wallet"])).fetchone()
+            out.append({"chain": r["chain"], "wallet": r["wallet"],
+                        "overlap": r["n"], "best_mult": r["best"] or 0,
+                        "pick_wins": (fwd["wins"] or 0) if fwd else 0,
+                        "pick_total": (fwd["total"] or 0) if fwd else 0})
+        return out
+
+    def reputation_summary(self) -> dict:
+        """Counts for the coverage tiles: scored wallets + winner-overlap links."""
+        scored = self._conn.execute(
+            "SELECT COUNT(DISTINCT wallet) n FROM wallet_winners").fetchone()["n"]
+        links = self._conn.execute(
+            "SELECT COUNT(*) n FROM wallet_winners").fetchone()["n"]
+        picks = self._conn.execute("SELECT COUNT(*) n FROM smart_buys").fetchone()["n"]
+        rugs = self._conn.execute(
+            "SELECT COUNT(DISTINCT wallet) n FROM wallet_rugs").fetchone()["n"]
+        return {"scored_wallets": scored, "overlap_links": links,
+                "forward_picks": picks, "rug_flagged": rugs}
 
     # -- coverage stats -------------------------------------------------
 

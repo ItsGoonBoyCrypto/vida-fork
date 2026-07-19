@@ -89,6 +89,8 @@ class TokenSnapshot:
     # buyers (0..N). Quality-weights the flat smart_money_count so proven sharps
     # count for more than unproven harvests. Populated at annotate.
     smart_money_quality: Optional[float] = None
+    toxic_buyer: bool = False        # a known rug/dumper wallet is among the buyers
+    core_alpha_buyer: str = ""       # a proven multi-winner wallet among the buyers (label)
     dex_boosted: bool = False
 
     # Social sentiment (LunarCrush; None = not covered / not fetched)

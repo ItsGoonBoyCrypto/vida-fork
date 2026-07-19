@@ -112,6 +112,22 @@
   <p class="eyebrow">Active signature</p>
   <div class="card" id="sig"><span class="empty">loading…</span></div>
 
+  <p class="eyebrow toggle" id="r-toggle">▸ Wallet reputation <span class="muted" id="r-count" style="text-transform:none;letter-spacing:0"></span></p>
+  <div class="card" id="r-card" hidden>
+    <div id="r-status" class="reasons" style="margin:0 0 .6rem"></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Chain</th><th>Wallet</th><th class="num">Winners</th><th class="num">Fwd picks</th><th class="num">Best</th></tr></thead>
+      <tbody id="r-rows"><tr><td colspan="5" class="empty">loading…</td></tr></tbody>
+    </table></div>
+    <div id="r-dep" hidden style="margin-top:1rem">
+      <p class="eyebrow" style="margin:.4rem 0">Deployers by win-rate <span class="muted" style="text-transform:none;letter-spacing:0">— Base/ETH direct deploys</span></p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Chain</th><th>Deployer</th><th class="num">W / R</th><th class="num">Win-rate</th></tr></thead>
+        <tbody id="r-dep-rows"></tbody>
+      </table></div>
+    </div>
+  </div>
+
   <p class="eyebrow">Live candidates — ranked by pump-likelihood</p>
   <div class="tablewrap"><table>
     <thead><tr><th>Chain</th><th>Token</th><th>Score</th><th class="num">MCAP</th><th class="num">Liq</th><th class="num">Age</th><th>Why</th></tr></thead>
@@ -195,6 +211,56 @@ document.getElementById('h-addr').addEventListener('keydown',e=>{ if(e.key==='En
 // Reveal the admin-key inputs together when the API is locked.
 (async()=>{ const d=await j('smart-wallets'); if(d&&d.locked){ const k=document.getElementById('h-key'); if(k) k.style.display=''; } })();
 
+// Wallet-reputation panel (collapsible, default collapsed) — watch the
+// smart_money_quality signal build as winners are harvested.
+function setRepOpen(open){
+  document.getElementById('r-card').hidden = !open;
+  document.getElementById('r-toggle').firstChild.nodeValue = (open?'▾':'▸') + ' Wallet reputation ';
+  try{ localStorage.setItem('r-open', open?'1':'0'); }catch(e){}
+}
+document.getElementById('r-toggle').onclick=()=>setRepOpen(document.getElementById('r-card').hidden);
+setRepOpen((()=>{ try{ return localStorage.getItem('r-open')==='1'; }catch(e){ return false; } })());
+
+async function loadReputation(){
+  const d = await j('reputation');
+  const rows = document.getElementById('r-rows');
+  const status = document.getElementById('r-status');
+  const cnt = document.getElementById('r-count');
+  if(!d){ return; }
+  const s = d.summary||{};
+  cnt.textContent = s.scored_wallets ? `(${s.scored_wallets} scored)` : '';
+  const feat = d.quality_in_signature
+    ? '✅ <b>smart_money_quality</b> is in the active signature — it\'s separating winners.'
+    : 'smart_money_quality feeds the signature once the ledger has enough data — harvest winners to build it.';
+  const tox = s.rug_flagged ? ` · <span style="color:var(--signal)">${s.rug_flagged} rug-flagged</span>` : '';
+  status.innerHTML = `${feat}<br><span class="muted">${s.scored_wallets||0} wallets scored · ${s.overlap_links||0} winner links · ${s.forward_picks||0} forward picks${tox}</span>`;
+  if(!d.top || !d.top.length){ rows.innerHTML = '<tr><td colspan="5" class="empty">no reputation yet — harvest winners to start scoring wallets</td></tr>'; }
+  else rows.innerHTML = d.top.map(w=>{
+    const col = CHAIN[w.chain]||'var(--muted)';
+    const fwd = w.pick_total ? `${w.pick_wins}/${w.pick_total}` : '—';
+    return `<tr>
+      <td><span class="chip" style="background:${col}">${w.chain}</span></td>
+      <td style="font-family:var(--mono);font-size:.78rem">${w.wallet.slice(0,8)}…${w.wallet.slice(-4)}</td>
+      <td class="num"><b>${w.overlap}</b></td>
+      <td class="num">${fwd}</td>
+      <td class="num">${w.best_mult?w.best_mult.toFixed(0)+'x':'—'}</td></tr>`;
+  }).join('');
+  // Deployer win-rates (Base/ETH direct deploys).
+  const dep = document.getElementById('r-dep'), depRows = document.getElementById('r-dep-rows');
+  if(d.deployers && d.deployers.length){
+    dep.hidden = false;
+    depRows.innerHTML = d.deployers.map(x=>{
+      const col = CHAIN[x.chain]||'var(--muted)';
+      const wr = x.total ? Math.round(100*x.wins/x.total)+'%' : '—';
+      return `<tr>
+        <td><span class="chip" style="background:${col}">${x.chain}</span></td>
+        <td style="font-family:var(--mono);font-size:.78rem">${x.deployer.slice(0,8)}…${x.deployer.slice(-4)}</td>
+        <td class="num">${x.wins}/${x.rugs}</td>
+        <td class="num"><b>${wr}</b></td></tr>`;
+    }).join('');
+  } else dep.hidden = true;
+}
+
 async function refresh(){
   const stats = await j('stats');
   if(stats){
@@ -206,7 +272,11 @@ async function refresh(){
   const se = document.getElementById('sig');
   if(sig && sig.active){
     const learned = sig.trained_on>0;
-    const rules = (sig.rules||[]).slice(0,10).map(r=>`<span class="rule">${r.feature} ${r.op} ${r.value}</span>`).join('');
+    const rules = (sig.rules||[]).slice(0,10).map(r=>{
+      const hot = r.feature==='smart_money_quality';
+      const st = hot ? ' style="outline:1px solid var(--accent);font-weight:600"' : '';
+      return `<span class="rule"${st}>${r.feature} ${r.op} ${r.value}</span>`;
+    }).join('');
     se.innerHTML = `<div class="sig-head"><span class="pill ${learned?'learned':'prior'}">${learned?'learned':'bootstrap prior'}</span>`
       + (sig.precision!=null?`<span class="muted" style="font-family:var(--mono);font-size:.8rem">precision ${(sig.precision*100).toFixed(0)}% · trained on ${sig.trained_on}</span>`:'')
       + `</div><div class="rules">${rules}</div>`
@@ -230,7 +300,8 @@ async function refresh(){
 
   document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
 }
-refresh(); loadWallets(); setInterval(refresh, 30000); setInterval(loadWallets, 30000);
+refresh(); loadWallets(); loadReputation();
+setInterval(refresh, 30000); setInterval(loadWallets, 30000); setInterval(loadReputation, 30000);
 </script>
 </body>
 </html>

@@ -57,3 +57,13 @@ def quality(rep: dict, last_ts: float = 0.0, now: float = 0.0) -> float:
 def quality_sum(qualities: list) -> float:
     """Total reputation weight of a token's smart buyers (the feature value)."""
     return round(sum(max(0.0, min(1.0, q)) for q in qualities), 4)
+
+
+def deployer_is_trusted(rep: dict, min_total: int = 2, min_win_rate: float = 0.5) -> bool:
+    """A deployer worth flagging: enough launches, mostly winners, no rugs."""
+    total = int(rep.get("total") or 0)
+    wins = int(rep.get("wins") or 0)
+    rugs = int(rep.get("rugs") or 0)
+    if total < min_total or rugs > 0:
+        return False
+    return (wins / total) >= min_win_rate

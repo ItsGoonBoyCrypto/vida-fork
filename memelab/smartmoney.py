@@ -66,10 +66,13 @@ def default_seeds() -> list:
 
 class SmartMoney:
     def __init__(self, store, session=None, seeds: list = None,
-                 harvest_buyers: int = 12):
+                 harvest_buyers: int = 12, core_alpha_min_overlap: int = 3,
+                 toxic_min_rugs: int = 2):
         self.store = store
         self._session = session
         self.harvest_buyers = harvest_buyers
+        self.core_alpha_min_overlap = core_alpha_min_overlap
+        self.toxic_min_rugs = toxic_min_rugs
         for chain, wallet in (seeds if seeds is not None else default_seeds()):
             store.add_smart_wallet(chain, wallet, source="seed")
 
@@ -102,6 +105,15 @@ class SmartMoney:
                 [wi.quality(rep.get(w, {})) for w in hits])
         except Exception:  # noqa: BLE001
             snap.smart_money_quality = None
+        # Toxic flag (repeat-rugger among buyers) + core-alpha flag (proven sharp).
+        try:
+            toxic = self.store.toxic_wallets(snap.chain, self.toxic_min_rugs)
+            snap.toxic_buyer = any(w in toxic for w in hits)
+            core = self.store.core_alpha_wallets(snap.chain, self.core_alpha_min_overlap)
+            hit_core = next((w for w in hits if w in core), "")
+            snap.core_alpha_buyer = f"{hit_core[:8]}…{hit_core[-4:]}" if hit_core else ""
+        except Exception:  # noqa: BLE001
+            pass
 
     async def harvest_winner(self, chain: Chain, token: str, mult: float = 0.0) -> int:
         """Add a confirmed winner's earliest buyers to the smart set. Returns count.
@@ -123,6 +135,42 @@ class SmartMoney:
         if added:
             log.info("smart-money: harvested %d early buyers of %s %s", added, chain.value, token)
         return added
+
+    async def harvest_rug(self, chain: Chain, token: str) -> int:
+        """Credit a confirmed rug's early buyers toward toxicity (wallet_rugs).
+        A wallet in >= toxic_min_rugs rugs (net-negative vs winners) → tokens it
+        buys get demoted (alerts suppressed)."""
+        if not self.store.marker_new(f"rugharvest|{chain.value}|{token.lower()}"):
+            return 0
+        buyers = await self._early_buyers(chain, token, self.harvest_buyers)
+        for w in buyers:
+            try:
+                self.store.record_wallet_rug(chain, w, token)
+            except Exception:  # noqa: BLE001
+                pass
+        return len(buyers)
+
+    async def _creator_of(self, chain: Chain, token: str) -> str:
+        """Raw creator of an EVM token via Blockscout (empty for Solana/unknown)."""
+        if not chain.is_evm or self._session is None:
+            return ""
+        from .chains.registry import REGISTRY
+        base = (REGISTRY[chain].explorer_api_url or "").rstrip("/")
+        if not base:
+            return ""
+        base = base + "/v2" if base.endswith("/api") else base
+        data = await self._get(f"{base}/addresses/{token}", None)
+        if not isinstance(data, dict):
+            return ""
+        return (data.get("creator_address_hash") or data.get("creator_address") or "").lower()
+
+    async def label_deployer(self, chain: Chain, token: str, outcome: str,
+                             launchpad_managers: set = None) -> None:
+        """Record a token's deployer + outcome (skips shared launchpad managers)."""
+        creator = await self._creator_of(chain, token)
+        if not creator or (launchpad_managers and creator in launchpad_managers):
+            return
+        self.store.record_deployer_token(chain, creator, token, outcome)
 
     # -- buyer sources --------------------------------------------------
 
