@@ -283,3 +283,12 @@ class Collector:
                         await self.smart_money.label_deployer(chain, token, "rug")
                 except Exception:
                     log.debug("rug harvest %s failed", token, exc_info=True)
+        # Cross-pollinate: pull the RH scanner's proven robinhood wallets in.
+        import os
+        scanner_db = os.environ.get("SCANNER_DB", "")
+        if scanner_db:
+            try:
+                from .bridge import import_scanner_reputation
+                import_scanner_reputation(self.store, scanner_db)
+            except Exception:
+                log.debug("scanner reputation import failed", exc_info=True)

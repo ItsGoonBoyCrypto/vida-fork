@@ -163,6 +163,7 @@ class Scanner:
         # Core-alpha wallet cache (proven multi-winner wallets → single-wallet alerts).
         self._core_alpha_cache: set = set()
         self._core_alpha_ts: float = 0.0
+        self._mm_rep_ts: float = 0.0   # last memelab-reputation sync
 
     # -- lifecycle -------------------------------------------------------
 
@@ -2060,6 +2061,8 @@ class Scanner:
 
         # Bounded auto-tune of scoring weights (periodic, dormant until settled).
         await self._maybe_autotune()
+        # Cross-pollinate: pull memelab's proven robinhood wallets (hourly).
+        self._maybe_sync_memelab_reputation()
 
         return [r for r in results if isinstance(r, ScoreResult)]
 
@@ -2104,6 +2107,24 @@ class Scanner:
                 log.info("autotune: %s", result.get("reason"))
         except Exception:  # noqa: BLE001
             log.exception("autotune failed")
+
+    def _maybe_sync_memelab_reputation(self) -> None:
+        """Hourly: pull memelab's proven robinhood wallets into our reputation.
+        Best-effort + additive — dormant when memelab.db isn't on the volume."""
+        import os
+        now = time.time()
+        if self._mm_rep_ts and now - self._mm_rep_ts < 3600:
+            return
+        self._mm_rep_ts = now
+        try:
+            from .memelab_bridge import import_memelab_reputation
+            n = import_memelab_reputation(
+                self.storage, os.environ.get("MEMELAB_DB", ""),
+                min_overlap=self.cfg.runtime.memelab_bridge_min_overlap)
+            if n:
+                self._core_alpha_ts = 0.0   # force the core-alpha cache to refresh
+        except Exception:  # noqa: BLE001
+            log.debug("memelab reputation sync failed", exc_info=True)
 
     def _active_mm_signature(self) -> Optional[dict]:
         """memelab's learned signature (cached hourly). None until it's trained —

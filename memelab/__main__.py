@@ -125,9 +125,16 @@ def build_export(store, chain: Chain) -> dict:
     wallets = sorted(store.smart_wallets(chain))
     raw = store.active_signature()
     sig = signature_from_json(raw) if raw else None
+    # Reputation: wallets proven on >= 2 distinct winners, with their overlap —
+    # the scanner can prioritise these (core-alpha) rather than treating the set
+    # as flat. (Live cross-pollination also happens DB-to-DB via bridge.py; this
+    # is the portable snapshot for env/manual seeding.)
+    core = [{"wallet": r["wallet"], "overlap": r["overlap"], "best_mult": r["best_mult"]}
+            for r in store.top_reputation_wallets(chain, limit=100) if r["overlap"] >= 2]
     return {
         "chain": chain.value,
         "smart_wallets": wallets,
+        "core_alpha": core,
         "signature": None if sig is None else {
             "rules": sig.rules, "precision": sig.precision,
             "trained_on": sig.trained_on, "notes": sig.notes},

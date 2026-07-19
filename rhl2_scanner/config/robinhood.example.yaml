@@ -252,6 +252,11 @@ runtime:
   core_alpha_alert: true           # fire 💎 on a core-alpha single-wallet buy
   toxic_min_rugs: 2                # distinct rugs (net vs winners) → toxic → demote
   rug_peak_mult_ceiling: 0.5       # a token whose peak fell to/below this = rug
+  # Cross-pollination: hourly, import memelab's robinhood wallets proven on >= this
+  # many distinct winners into our smart set + reputation (needs MEMELAB_DB set;
+  # additive + dormant when absent). The reverse (scanner→memelab) is automatic
+  # in the combined deploy via SCANNER_DB.
+  memelab_bridge_min_overlap: 2
 
   autotune_enabled: false
   autotune_min_settled: 30            # dormant until this many alerts have settled

@@ -75,6 +75,12 @@ async def _supervise(name: str, factory) -> None:
 
 
 async def main() -> None:
+    # Point memelab at the scanner's DB on the shared volume so the reputation
+    # bridge (scanner → memelab) can cross-pollinate. Both DBs live together.
+    if "SCANNER_DB" not in os.environ:
+        db_dir = os.environ.get("RHL2_DB_DIR", "/app/data")
+        os.environ["SCANNER_DB"] = os.path.join(db_dir, "scanner.db")
+
     parts = []
     if os.environ.get("RUN_SCANNER", "1") != "0":
         parts.append(_supervise("scanner", _run_scanner))
