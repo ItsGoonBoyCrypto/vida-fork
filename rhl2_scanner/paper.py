@@ -54,7 +54,8 @@ class PaperTrader:
             )
         return trade_id
 
-    def record_alerted(self, snap: TokenSnapshot, result: ScoreResult) -> Optional[int]:
+    def record_alerted(self, snap: TokenSnapshot, result: ScoreResult,
+                       conviction: float = 0.0) -> Optional[int]:
         """Record an ACTUAL alert for live performance tracking (no score floor).
 
         Unlike ``record`` (calibration: every safety-passing candidate over the
@@ -63,7 +64,7 @@ class PaperTrader:
         """
         if snap.price_usd is None or not snap.pair_address:
             return None
-        trade_id = self.storage.open_paper_trade(snap, result)
+        trade_id = self.storage.open_paper_trade(snap, result, conviction=conviction)
         if trade_id is not None:
             log.info("perf entry #%s %s score=%.0f level=%s price=%s",
                      trade_id, snap.symbol, result.composite, result.level.value, snap.price_usd)
@@ -187,6 +188,115 @@ class PaperTrader:
             "healthy (>=5%)": _stats([r for r in rows if (_lqm(r) or 0) >= 0.05]),
         }
         return report
+
+
+def _row_conviction(r) -> float:
+    try:
+        return float(r["conviction"] or 0.0)
+    except (KeyError, IndexError, TypeError):
+        return 0.0
+
+
+def _trade_outcome_mult(r, tp: float, sl: float) -> float:
+    """Realized exit multiple under a TP/SL rule, from the recorded peak/trough.
+
+    Ordering assumption: for pump-then-dump memecoins the peak usually precedes
+    the trough, so if the peak reached TP we treat it as taken. Else if it fell
+    to the stop, we're stopped out. Else we exit at the last observed price.
+    """
+    mx = r["max_mult"] or 1.0
+    mn = r["min_mult"] or 1.0
+    if mx >= tp:
+        return tp
+    if mn <= sl:
+        return sl
+    if r["entry_price"] and r["last_price"]:
+        return r["last_price"] / r["entry_price"]
+    return mn
+
+
+def strategy_pnl(rows, tp: float = 2.5, sl: float = 0.55, fee: float = 0.03,
+                 settled_only: bool = True) -> dict:
+    """Simulate trading the alerts with a fixed take-profit / stop-loss.
+
+    Equal size per trade; ``fee`` is round-trip cost+slippage subtracted from each
+    exit. Reports realized P&L, expectancy, profit factor, max drawdown, and the
+    per-conviction-bucket breakdown (the calibration that proves conviction works).
+    """
+    trades = [r for r in rows if (r["settled"] or not settled_only)]
+    trades = [r for r in trades if r["entry_price"]]
+    trades.sort(key=lambda r: r["entry_ts"] or 0)
+
+    def _one(r):
+        gross = _trade_outcome_mult(r, tp, sl)
+        net = gross * (1.0 - fee)          # round-trip fee/slippage
+        return net - 1.0                   # return as a fraction of the position
+
+    rets = [_one(r) for r in trades]
+    n = len(rets)
+    out: dict = {"tp": tp, "sl": sl, "fee": fee, "trades": n}
+    if not n:
+        return out
+    tp_hits = sum(1 for r in trades if (r["max_mult"] or 1) >= tp)
+    sl_hits = sum(1 for r in trades if (r["max_mult"] or 1) < tp and (r["min_mult"] or 1) <= sl)
+    gains = sum(x for x in rets if x > 0)
+    losses = -sum(x for x in rets if x < 0)
+    # Equity curve (compounding $1 per trade is separate; here additive R units).
+    equity, peak, max_dd = 0.0, 0.0, 0.0
+    for x in rets:
+        equity += x
+        peak = max(peak, equity)
+        max_dd = min(max_dd, equity - peak)
+    out.update({
+        "tp_hits": tp_hits, "sl_hits": sl_hits,
+        "expired": n - tp_hits - sl_hits,
+        "win_rate": round(tp_hits / n, 3),
+        "avg_return": round(sum(rets) / n, 3),          # expectancy per trade (R)
+        "total_return": round(sum(rets), 2),            # sum of R over all trades
+        "best": round(max(rets), 2), "worst": round(min(rets), 2),
+        "profit_factor": round(gains / losses, 2) if losses else None,
+        "max_drawdown": round(max_dd, 2),
+    })
+    # By conviction bucket — the calibration.
+    bands = [("<40", 0, 40), ("40-59", 40, 60), ("60-74", 60, 75), ("75+", 75, 201)]
+    out["by_conviction"] = []
+    for label, lo, hi in bands:
+        sub = [(_one(r)) for r in trades if lo <= _row_conviction(r) < hi]
+        if sub:
+            out["by_conviction"].append({
+                "band": label, "n": len(sub),
+                "avg_return": round(sum(sub) / len(sub), 3),
+                "win_rate": round(sum(1 for x in sub if x > 0) / len(sub), 3)})
+    return out
+
+
+def format_pnl_html(p: dict) -> str:
+    """Telegram digest for the strategy P&L simulation."""
+    from html import escape
+    if not p.get("trades"):
+        return ("📈 <b>Strategy P&amp;L</b>\nNo settled alerts yet — this fills in as "
+                "alerted tokens reach their final checkpoint.")
+    lines = [
+        f"📈 <b>Strategy P&amp;L</b> — TP {p['tp']:g}x / SL {p['sl']:g}x · "
+        f"fee {p['fee']:.0%}",
+        escape(f"{p['trades']} trades · {p['tp_hits']} TP · {p['sl_hits']} SL · "
+               f"{p['expired']} exit-at-close"),
+        escape(f"expectancy {p['avg_return']:+.2f}R/trade · total {p['total_return']:+.1f}R"),
+        escape(f"profit factor {p['profit_factor']} · max drawdown {p['max_drawdown']:.1f}R"),
+        escape(f"best {p['best']:+.1f}R · worst {p['worst']:+.1f}R"),
+    ]
+    if p.get("by_conviction"):
+        lines.append("")
+        lines.append("<b>By conviction</b> (does confidence pay?)")
+        for b in p["by_conviction"]:
+            lines.append(escape(
+                f"• {b['band']}: n={b['n']} · exp {b['avg_return']:+.2f}R · "
+                f"win {b['win_rate']:.0%}"))
+    verdict = ("✅ net profitable" if p["total_return"] > 0 else "❌ net negative")
+    lines.append("")
+    lines.append(f"<i>{verdict} on paper. Assumes peak-before-trough ordering; "
+                 "size small, real slippage varies.</i>")
+    return "\n".join(lines)
 
 
 def format_digest_html(rep: dict, win_multiple: float = 2.0,

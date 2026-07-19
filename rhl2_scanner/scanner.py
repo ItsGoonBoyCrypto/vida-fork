@@ -1020,11 +1020,14 @@ class Scanner:
                 snap.market_cap_usd, snap.price_usd, snap.holder_count,
                 int(feats.get("smart_count") or 0), snap.age_minutes, 1)
 
-        if not rc.curve_match_alert or self.cfg.runtime.dry_run:
-            return
+        # Evaluate the match regardless of alerting so conviction can use it.
         profile = self._active_curve_profile()
         matched, score, hits, _misses = curve_match(feats, profile)
-        if matched and is_confirmed_climb(feats):
+        snap.curve_matched = bool(matched and is_confirmed_climb(feats))
+
+        if not rc.curve_match_alert or self.cfg.runtime.dry_run:
+            return
+        if snap.curve_matched:
             if self.storage.pos_event_new("curve_match|" + snap.token_address.lower()):
                 learned = self._curve_profile_is_learned()
                 await self._send_html(self._curve_match_html(snap, score, feats, learned))
@@ -1326,6 +1329,8 @@ class Scanner:
             "<code>/diag</code> — RPC + DB + feature health check",
             "<code>/stats [hours]</code> — activity snapshot (discovered/alerts/clusters)",
             "<code>/perf</code> — how your alerts have performed (peak x, hit/rug rate)",
+            "<code>/pnl [tp] [sl]</code> — simulated P&amp;L if you traded the alerts "
+            "(TP/SL, expectancy, drawdown, by-conviction)",
             "<code>/inspect 0xCA</code> — trace one token through the full pipeline",
             "",
             "<b>Mute a token</b>",
@@ -1487,6 +1492,18 @@ class Scanner:
                 return
             await self._send_html(
                 format_digest_html(rep, win, title="Alert Performance", noun="alerts"))
+        elif cmd in ("pnl", "strategy", "backtest"):
+            from .paper import PaperTrader, format_pnl_html, strategy_pnl
+            # optional args: /pnl [tp] [sl]
+            def _num(i, default):
+                try:
+                    return float(parts[i])
+                except (IndexError, ValueError):
+                    return default
+            tp, sl = _num(1, 2.5), _num(2, 0.55)
+            rows = self.storage.all_paper_trades()
+            p = strategy_pnl(rows, tp=tp, sl=sl)
+            await self._send_html(format_pnl_html(p))
         elif cmd in ("autotune", "weights"):
             from html import escape as _esc
             from . import autotune as _at
@@ -2165,6 +2182,29 @@ class Scanner:
                  result.composite, new_comp)
         return replace(result, composite=new_comp, level=lvl)
 
+    def _compute_conviction(self, snap: TokenSnapshot, result: ScoreResult):
+        """Fuse every independent signal into a 0-100 conviction (confluence)."""
+        from .conviction import fuse
+        sig_match = None
+        sig = self._active_mm_signature()
+        if sig:
+            try:
+                from .signature_bonus import match_fraction
+                frac, judged = match_fraction(snap, sig)
+                sig_match = frac if judged >= 3 else None
+            except Exception:  # noqa: BLE001
+                sig_match = None
+        return fuse({
+            "composite": result.composite,
+            "safety_passed": result.safety_passed,
+            "signature_match": sig_match,
+            "curve_match": snap.curve_matched,
+            "core_alpha": len(snap.core_alpha_wallets or []),
+            "smart_quality": snap.smart_money_quality_bonus or 0.0,
+            "social": None,
+            "toxic": snap.toxic_buyer,
+        })
+
     async def _process(self, snap: TokenSnapshot) -> Optional[ScoreResult]:
         async with self._sem:
             await self._enrich(snap)
@@ -2225,13 +2265,20 @@ class Scanner:
             log.debug("%s in cooldown (tier=%d, prev=%d), skipping", snap.symbol, tier, prev)
             return result
 
+        # Conviction — fuse every independent signal into one 0-100 confidence.
+        conv = self._compute_conviction(snap, result)
+        conv_line = f"🎯 <b>Conviction {conv.score:.0f}/100</b>"
+        if conv.summary():
+            conv_line += f"  <i>{conv.summary()}</i>"
+
         note = self._escalation_note(prev, tier) if escalated else ""
+        note = (note + "\n" if note else "") + conv_line
         if tier == 0:
             html = format_early_launch_html(snap, result)
-            if note:
-                html = note + "\n" + html
+            html = note + "\n" + html
             mid = await self._send_html(html)
-            log.info("EARLY %s age=%.0fm liq=%s", snap.symbol, snap.age_minutes or 0, snap.liquidity_usd)
+            log.info("EARLY %s age=%.0fm liq=%s conv=%.0f", snap.symbol,
+                     snap.age_minutes or 0, snap.liquidity_usd, conv.score)
         else:
             mid = await self.notifier.send(snap, result, note=note)
             tag = "UPGRADE" if escalated else "ALERT"
@@ -2247,7 +2294,7 @@ class Scanner:
         self.storage.record_alert(snap, result, rank=tier)
         # Track this alert's real outcome (peak x / hit / rug) on first alert.
         if self.perf is not None and prev < 0:
-            self.perf.record_alerted(snap, result)
+            self.perf.record_alerted(snap, result, conviction=conv.score)
         return result
 
     @staticmethod

@@ -114,6 +114,7 @@ class TokenSnapshot:
     smart_money_quality_bonus: Optional[float] = None  # quality-weighted discovery pts
     core_alpha_wallets: list[str] = field(default_factory=list)  # proven sharps among buyers
     toxic_buyer: bool = False       # a known rug/dumper wallet is among the buyers
+    curve_matched: bool = False     # matched the learned pre-migration winning setup this cycle
     launchpad: str = ""             # origin launchpad name if known (e.g. "flap")
     curve_progress_pct: Optional[float] = None   # bonding-curve fill % (pre-graduation)
 

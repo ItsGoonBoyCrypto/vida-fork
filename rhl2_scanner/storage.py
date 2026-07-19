@@ -229,6 +229,10 @@ class Storage:
         if "best_alert_rank" not in cols:
             self._conn.execute(
                 "ALTER TABLE seen_tokens ADD COLUMN best_alert_rank INTEGER DEFAULT -1")
+        pcols = {r["name"] for r in self._conn.execute("PRAGMA table_info(paper_trades)")}
+        if "conviction" not in pcols:
+            self._conn.execute(
+                "ALTER TABLE paper_trades ADD COLUMN conviction REAL DEFAULT 0")
 
     def close(self) -> None:
         self._conn.close()
@@ -331,7 +335,8 @@ class Storage:
         )
         return cur.fetchone() is not None
 
-    def open_paper_trade(self, snap: TokenSnapshot, result: ScoreResult) -> Optional[int]:
+    def open_paper_trade(self, snap: TokenSnapshot, result: ScoreResult,
+                         conviction: float = 0.0) -> Optional[int]:
         """Record a would-be entry. One open trade per pair; returns row id."""
         if self.has_open_paper_trade(snap.pair_address):
             return None
@@ -341,8 +346,8 @@ class Storage:
             """INSERT INTO paper_trades
                (pair_address, token_address, symbol, chain, entry_ts, entry_price,
                 entry_mcap, entry_liq, score, level, safety_passed, breakdown_json,
-                last_price, last_checked_ts)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                last_price, last_checked_ts, conviction)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 snap.pair_address.lower(),
                 snap.token_address.lower(),
@@ -358,6 +363,7 @@ class Storage:
                 json.dumps(breakdown),
                 snap.price_usd,
                 now,
+                round(float(conviction or 0.0), 1),
             ),
         )
         self._conn.commit()
