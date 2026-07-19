@@ -110,6 +110,10 @@ class TokenSnapshot:
     socials: dict[str, str] = field(default_factory=dict)   # {"telegram": url, ...}
     smart_money_wallets: list[str] = field(default_factory=list)
     smart_money_labels: dict[str, str] = field(default_factory=dict)  # wallet -> label/group
+    # Wallet-reputation signals (populated from the reputation ledger at enrich).
+    smart_money_quality_bonus: Optional[float] = None  # quality-weighted discovery pts
+    core_alpha_wallets: list[str] = field(default_factory=list)  # proven sharps among buyers
+    toxic_buyer: bool = False       # a known rug/dumper wallet is among the buyers
     launchpad: str = ""             # origin launchpad name if known (e.g. "flap")
     curve_progress_pct: Optional[float] = None   # bonding-curve fill % (pre-graduation)
 

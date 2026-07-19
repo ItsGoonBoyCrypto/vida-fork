@@ -51,6 +51,7 @@ from .storage import Storage
 from .walletwatch import (
     WalletWatcher,
     format_cluster_html,
+    format_core_alpha_html,
     format_dump_html,
     format_exit_html,
     format_milestone_html,
@@ -159,6 +160,9 @@ class Scanner:
         }
         self._last_autotune_ts: Optional[float] = None
         self._apply_weight_override()
+        # Core-alpha wallet cache (proven multi-winner wallets → single-wallet alerts).
+        self._core_alpha_cache: set = set()
+        self._core_alpha_ts: float = 0.0
 
     # -- lifecycle -------------------------------------------------------
 
@@ -512,6 +516,33 @@ class Scanner:
             lines.append("")
             lines.append("Tip: /inspect any of these CAs to see how they score now.")
         return "\n".join(lines)
+
+    async def _creator_of(self, token: str) -> str:
+        """Raw creator (contract/EOA) of a token via Blockscout, lowercased."""
+        base = (self.cfg.chain.explorer_api_url or "").rstrip("/")
+        base = base + "/v2" if base.endswith("/api") else base
+        if not base or self._session is None:
+            return ""
+        try:
+            async with self._session.get(f"{base}/addresses/{token}") as r:
+                data = await r.json() if r.status == 200 else None
+        except Exception:  # noqa: BLE001
+            return ""
+        if not isinstance(data, dict):
+            return ""
+        return (data.get("creator_address_hash") or data.get("creator_address") or "").lower()
+
+    async def _label_deployer(self, token: str, outcome: str) -> None:
+        """Record a token's deployer + outcome for per-creator win-rate.
+
+        Skips known launchpad managers: on a bonding-curve launchpad the token's
+        on-chain creator IS the shared manager/factory, not a per-launch deployer,
+        so crediting it would be meaningless.
+        """
+        creator = await self._creator_of(token)
+        if not creator or creator in self.cfg.known_launchpad_addresses():
+            return
+        self.storage.record_deployer_token(creator, token, outcome)
 
     async def find_deployer(self, token: str) -> str:
         """Report the contract/EOA that created a token — how to find a launchpad.
@@ -1327,6 +1358,10 @@ class Scanner:
             "for a single rate-limit-proof call)",
             "<code>/harvest 0xCA</code> — feed a winner we MISSED: harvests its early "
             "buyers into the smart set so future similar setups score higher",
+            "<code>/harvestrug 0xCA</code> — log a rug: marks repeat-rugger wallets "
+            "toxic so tokens they buy get demoted",
+            "<code>/alpha</code> — top wallets by winner-overlap (⭐ = core-alpha)",
+            "<code>/deployers</code> — deployer win-rates (direct-deploy tokens)",
             "<code>/calibrate 0xCA1 0xCA2 …</code> — tune thresholds against your known winners",
             "<code>/autotune [run|reset]</code> — bounded auto-tuned scoring weights "
             "(view state, force a run, or revert to baseline)",
@@ -1533,6 +1568,56 @@ class Scanner:
                     await self._send_html(await self._harvest_manual_winner(ca))
                 except Exception as exc:  # noqa: BLE001
                     await self._send_html("harvest failed: " + __import__("html").escape(str(exc)))
+        elif cmd in ("harvestrug", "rug", "logrug"):
+            cas = [p.lower() for p in parts[1:]
+                   if p.lower().startswith("0x") and len(p) == 42]
+            if not cas:
+                await self._send_html(
+                    "Usage: <code>/harvestrug 0xCA</code>\n"
+                    "Log a rug: marks its deployer a rugger and credits its early "
+                    "wallets toward toxicity, so tokens repeat-ruggers buy get demoted.")
+                return
+            for ca in cas[:5]:
+                try:
+                    await self._send_html(await self._harvest_rug(ca))
+                except Exception as exc:  # noqa: BLE001
+                    await self._send_html("rug log failed: " + __import__("html").escape(str(exc)))
+        elif cmd in ("alpha", "alphas", "reputation", "rep"):
+            top = self.storage.top_reputation_wallets(limit=15)
+            if not top:
+                await self._send_html(
+                    "💎 No wallet reputation yet — it builds as winners are harvested "
+                    "(/harvest) and the winner-sweep labels early buyers.")
+                return
+            core_min = self.cfg.runtime.core_alpha_min_overlap
+            lines = ["💎 <b>Top wallets by winner-overlap</b> "
+                     f"(≥{core_min} = core-alpha, fires 💎 on its own)"]
+            for r in top:
+                star = " ⭐" if r["overlap"] >= core_min else ""
+                lab = self.cfg.wallet_watch.labels.get(r["wallet"], "")
+                tag = f" ({__import__('html').escape(lab)})" if lab else ""
+                lines.append(f"<code>{r['wallet'][:8]}…{r['wallet'][-4:]}</code>{tag} — "
+                             f"{r['overlap']} winners, best {r['best_mult']:.0f}x{star}")
+            await self._send_html("\n".join(lines))
+        elif cmd in ("deployers", "creators"):
+            devs = self.storage._conn.execute(
+                "SELECT deployer, "
+                "SUM(CASE WHEN outcome='winner' THEN 1 ELSE 0 END) wins, "
+                "SUM(CASE WHEN outcome='rug' THEN 1 ELSE 0 END) rugs, COUNT(*) total "
+                "FROM deployer_tokens GROUP BY deployer "
+                "ORDER BY wins DESC, total DESC LIMIT 15").fetchall()
+            if not devs:
+                await self._send_html(
+                    "🏭 No deployer stats yet. (Note: on flap/Bags the on-chain "
+                    "creator is the shared manager, so per-deployer stats only build "
+                    "for direct-deploy tokens.)")
+                return
+            lines = ["🏭 <b>Deployers by win-rate</b>"]
+            for d in devs:
+                wr = (d["wins"] / d["total"]) if d["total"] else 0
+                lines.append(f"<code>{d['deployer'][:8]}…{d['deployer'][-4:]}</code> — "
+                             f"{d['wins']}W/{d['rugs']}R of {d['total']} ({wr:.0%})")
+            await self._send_html("\n".join(lines))
         elif cmd in ("curveprobe", "probe"):
             if not valid_ca:
                 await self._send_html("Usage: <code>/curveprobe 0x&lt;flap token&gt;</code>")
@@ -1711,6 +1796,19 @@ class Scanner:
             return
         token = ev.token_address
         self.storage.record_smart_buy(token, ev.wallet)
+
+        # Core-alpha: a single wallet proven across many winners is signal enough
+        # on its own — fire a 💎 alert without waiting for a cluster (once/token).
+        if rc.core_alpha_alert and self._is_core_alpha(ev.wallet) \
+                and self.storage.pos_event_new(f"{token.lower()}|corealpha"):
+            label = self.cfg.wallet_watch.labels.get(ev.wallet) \
+                or self._entity_of(ev.wallet)
+            ov = self.storage.wallet_reputation_rows([ev.wallet]).get(
+                ev.wallet, {}).get("winner_overlap", 0)
+            await self._send_html(format_core_alpha_html(
+                ev.symbol, token, label, ov, ev.chart_url))
+            log.info("CORE-ALPHA %s bought $%s (overlap %s)", ev.wallet, ev.symbol, ov)
+
         if self.storage.cluster_already_alerted(token):
             return
         since = time.time() - rc.smart_cluster_window_hours * 3600.0
@@ -2176,12 +2274,16 @@ class Scanner:
         if added:
             log.info("autoseed: harvested %d early buyers of $%s (winner)", added, snap.symbol)
 
-    async def _harvest_buyers(self, token: str, symbol: str, source_prefix: str) -> int:
-        """Add a winner's earliest buyers to the smart set. Returns count added."""
+    async def _harvest_buyers(self, token: str, symbol: str, source_prefix: str,
+                              mult: float = 0.0) -> int:
+        """Add a winner's earliest buyers to the smart set. Returns count added.
+
+        Every buyer is also credited in the reputation ledger against this winner
+        (wallet_winners) — DISTINCT winners per wallet = its overlap/quality, even
+        for a wallet already in the set (so overlap keeps climbing).
+        """
         rc = self.cfg.runtime
         if self._session is None:
-            return 0
-        if len(self.storage.smart_wallets()) >= rc.smart_money_max_set:
             return 0
         try:
             smart = SmartMoneyClient(self.cfg, session=self._session)
@@ -2189,10 +2291,16 @@ class Scanner:
         except Exception:
             log.debug("early_buyers failed", exc_info=True)
             return 0
+        capped = len(self.storage.smart_wallets()) >= rc.smart_money_max_set
         added = 0
         for w in buyers:
-            if self._add_smart_wallet(w, source=f"{source_prefix}:{token.lower()}",
-                                      note=f"${symbol}"):
+            # Ledger credit always (drives reputation) even if the set is full.
+            try:
+                self.storage.record_wallet_winner(w, token, mult)
+            except Exception:  # noqa: BLE001
+                pass
+            if not capped and self._add_smart_wallet(
+                    w, source=f"{source_prefix}:{token.lower()}", note=f"${symbol}"):
                 added += 1
         return added
 
@@ -2232,9 +2340,18 @@ class Scanner:
         added = 0
         if not bundled_out:
             try:
-                added = await self._harvest_buyers(ca, symbol, source_prefix="manual")
+                # Manual winners assert a real pump — credit the ledger as a winner.
+                added = await self._harvest_buyers(
+                    ca, symbol, source_prefix="manual",
+                    mult=self.cfg.runtime.winner_harvest_win_mult)
             except Exception:  # noqa: BLE001
                 log.debug("manual harvest buyers failed", exc_info=True)
+            try:
+                self.storage.record_token_outcome(
+                    ca, self.cfg.runtime.winner_harvest_win_mult, is_rug=False)
+                await self._label_deployer(ca, "winner")
+            except Exception:  # noqa: BLE001
+                log.debug("manual outcome/deployer labeling failed", exc_info=True)
         # Persist the exemplar (metrics snapshot) for the winners dataset.
         try:
             self.storage.save_manual_winner(ca, symbol, m, added)
@@ -2273,6 +2390,42 @@ class Scanner:
                 lines.append(_esc("• " + b))
         return "\n".join(lines)
 
+    async def _harvest_rug(self, ca: str) -> str:
+        """Learn from a RUG: mark its deployer a rugger + credit its early buyers
+        toward toxicity. A wallet appearing across several rugs (and net-negative
+        vs winners) becomes toxic → tokens it buys get demoted.
+
+        One-off apers aren't blacklisted: toxicity needs toxic_min_rugs distinct
+        rugs AND a rug count that outweighs the wallet's winner overlap.
+        """
+        from html import escape as _esc
+        ca = ca.lower()
+        rc = self.cfg.runtime
+        try:
+            self.storage.record_token_outcome(ca, 0.0, is_rug=True)
+            await self._label_deployer(ca, "rug")
+        except Exception:  # noqa: BLE001
+            log.debug("rug outcome/deployer labeling failed", exc_info=True)
+        credited = 0
+        if self._session is not None:
+            try:
+                smart = SmartMoneyClient(self.cfg, session=self._session)
+                buyers = await smart.early_buyers(ca, rc.smart_money_autoseed_buyers)
+                for w in buyers:
+                    self.storage.record_wallet_rug(w, ca)
+                    credited += 1
+            except Exception:  # noqa: BLE001
+                log.debug("rug buyer credit failed", exc_info=True)
+        toxic_now = len(self.storage.toxic_wallets(rc.toxic_min_rugs))
+        return "\n".join([
+            f"☠️ <b>Logged rug</b> <code>{_esc(ca)}</code>",
+            "",
+            f"Marked deployer a rugger &amp; credited {credited} early wallet(s) "
+            "toward toxicity.",
+            f"A wallet in ≥{rc.toxic_min_rugs} rugs (net-negative vs winners) is "
+            f"toxic → its buys get demoted. <b>{toxic_now}</b> wallet(s) toxic so far.",
+        ])
+
     async def _harvest_winners(self, dex) -> None:
         """Retroactive sweep: harvest early buyers of tokens that ran >= win_mult.
 
@@ -2301,6 +2454,16 @@ class Scanner:
                 price = None
             if price is None or price <= 0:
                 continue
+            mult = price / entry
+            # Record the realized outcome (forward-pick validation feed) + label
+            # the deployer, for every settled candidate — winner OR rug.
+            is_rug = mult <= rc.rug_peak_mult_ceiling
+            try:
+                self.storage.record_token_outcome(token, mult, is_rug)
+                await self._label_deployer(token, "winner" if mult >= rc.winner_harvest_win_mult
+                                           else "rug" if is_rug else "neutral")
+            except Exception:  # noqa: BLE001
+                log.debug("outcome/deployer labeling failed", exc_info=True)
             # If we tracked this token on the curve, label its pre-migration setup
             # (win >= win_mult) so the curve-pattern matcher can learn from it.
             if self.storage.curve_observation_count(token) >= 2:
@@ -2308,12 +2471,12 @@ class Scanner:
                     self._label_curve_setup(token, entry, price, rc.winner_harvest_win_mult)
                 except Exception:
                     log.debug("curve setup labeling failed", exc_info=True)
-            if price / entry >= rc.winner_harvest_win_mult:
+            if mult >= rc.winner_harvest_win_mult:
                 added = await self._harvest_buyers(token, row["symbol"] or "?",
-                                                   source_prefix="winner")
+                                                   source_prefix="winner", mult=mult)
                 winners += 1
                 log.info("winner-harvest: $%s ran %.1fx — harvested %d early buyers",
-                         row["symbol"], price / entry, added)
+                         row["symbol"], mult, added)
         if winners:
             log.info("winner-harvest swept %d candidates, %d winners", len(due), winners)
         # Keep the curve-observation table bounded.
@@ -2413,8 +2576,47 @@ class Scanner:
             _safe(smart.active_wallets(snap)),
         )
 
+        # Quality-weight the smart buyers + flag core-alpha / toxic wallets.
+        self._attach_reputation(snap)
         # Attach one-tap links for the alert (explorer + launchpad trade page).
         self._attach_links(snap)
+
+    def _is_core_alpha(self, wallet: str) -> bool:
+        """True if the wallet is on >= core_alpha_min_overlap distinct winners.
+        Cached per cycle-ish (60s) so the per-buy check stays cheap."""
+        now = time.time()
+        if not self._core_alpha_cache or now - self._core_alpha_ts > 60:
+            try:
+                self._core_alpha_cache = set(self.storage.core_alpha_wallets(
+                    self.cfg.runtime.core_alpha_min_overlap))
+            except Exception:  # noqa: BLE001
+                self._core_alpha_cache = set()
+            self._core_alpha_ts = now
+        return wallet.lower() in self._core_alpha_cache
+
+    def _attach_reputation(self, snap: TokenSnapshot) -> None:
+        """Score this token's smart buyers by reputation → quality bonus + flags.
+
+        Turns the flat smart-wallet headcount into a quality-weighted discovery
+        bonus, marks any core-alpha (multi-winner) wallets, and flags a toxic
+        (rug/dumper) buyer. Dormant until the ledger has data — quality of a
+        freshly-harvested wallet is a modest positive, not zero.
+        """
+        wallets = [w.lower() for w in (snap.smart_money_wallets or [])]
+        if not wallets:
+            return
+        try:
+            from . import wallet_intel as wi
+            rep = self.storage.wallet_reputation_rows(wallets)
+            quals = [wi.quality(rep.get(w, {})) for w in wallets]
+            snap.smart_money_quality_bonus = wi.smart_money_quality_bonus(quals)
+            core = set(self.storage.core_alpha_wallets(
+                self.cfg.runtime.core_alpha_min_overlap))
+            snap.core_alpha_wallets = [w for w in wallets if w in core]
+            toxic = self.storage.toxic_wallets(self.cfg.runtime.toxic_min_rugs)
+            snap.toxic_buyer = any(w in toxic for w in wallets)
+        except Exception:  # noqa: BLE001
+            log.debug("reputation attach failed", exc_info=True)
 
     def _attach_links(self, snap: TokenSnapshot) -> None:
         """Populate explorer_url (Blockscout token page) + trade_url (launchpad)."""

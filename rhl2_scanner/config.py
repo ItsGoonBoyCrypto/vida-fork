@@ -434,6 +434,19 @@ class RuntimeConfig:
     # likely sybils and would poison the smart-money cluster signal.
     harvest_max_bundle_pct: float = 50.0
 
+    # --- Wallet reputation (self-curating smart set) ---
+    # A wallet that was an early buyer of >= this many DISTINCT winners is
+    # "core alpha" — proven enough to fire a single-wallet alert on its own.
+    core_alpha_min_overlap: int = 3
+    core_alpha_alert: bool = True          # fire 💎 alerts on a core-alpha buy
+    # A wallet in >= this many DISTINCT rugs (and net-negative vs its winners) is
+    # toxic: tokens it buys get demoted.
+    toxic_min_rugs: int = 2
+    # Retroactive winner-harvest also labels each harvested wallet against the
+    # winner (overlap) and records the token's realized outcome (forward-pick
+    # validation). A token whose peak fell to/below this is counted a rug.
+    rug_peak_mult_ceiling: float = 0.5
+
     # Post a "scanner online" message on startup (also serves as a wiring test).
     send_startup_message: bool = True
     # Live alerts on a chain without a tax oracle (no GoPlus coverage, no DEX

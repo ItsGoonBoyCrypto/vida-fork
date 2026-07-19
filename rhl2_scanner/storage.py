@@ -162,6 +162,48 @@ CREATE TABLE IF NOT EXISTS manual_winners (
     buyers_added  INTEGER DEFAULT 0,
     ts            REAL NOT NULL
 );
+
+-- Wallet reputation ledger --------------------------------------------------
+-- Every (wallet, winner-token) it was an early buyer of. DISTINCT count per
+-- wallet = winner-overlap (a wallet on many winners is a proven sharp).
+CREATE TABLE IF NOT EXISTS wallet_winners (
+    wallet  TEXT NOT NULL,
+    token   TEXT NOT NULL,          -- a confirmed-winner token it was early on
+    mult    REAL,                   -- that winner's peak multiple (context)
+    ts      REAL NOT NULL,
+    PRIMARY KEY (wallet, token)
+);
+CREATE INDEX IF NOT EXISTS idx_wallet_winners_w ON wallet_winners(wallet);
+
+-- Every (wallet, rug-token) it was early in / dumped. DISTINCT count = toxicity.
+CREATE TABLE IF NOT EXISTS wallet_rugs (
+    wallet  TEXT NOT NULL,
+    token   TEXT NOT NULL,
+    ts      REAL NOT NULL,
+    PRIMARY KEY (wallet, token)
+);
+CREATE INDEX IF NOT EXISTS idx_wallet_rugs_w ON wallet_rugs(wallet);
+
+-- Realized outcome per token (peak multiple + rug flag), filled as tokens age.
+-- Joined with smart_buys to score each wallet's FORWARD picks (did the tokens a
+-- smart wallet bought actually pump?).
+CREATE TABLE IF NOT EXISTS token_outcomes (
+    token       TEXT PRIMARY KEY,
+    peak_mult   REAL,
+    is_rug      INTEGER DEFAULT 0,
+    ts          REAL NOT NULL
+);
+
+-- Deployers of confirmed winners/rugs → a per-creator win-rate. A serial-winner
+-- deployer's NEXT launch is a strong pre-emptive alert.
+CREATE TABLE IF NOT EXISTS deployer_tokens (
+    deployer  TEXT NOT NULL,
+    token     TEXT NOT NULL,
+    outcome   TEXT,                 -- 'winner' | 'rug' | 'neutral'
+    ts        REAL NOT NULL,
+    PRIMARY KEY (deployer, token)
+);
+CREATE INDEX IF NOT EXISTS idx_deployer_tokens_d ON deployer_tokens(deployer);
 """
 
 
@@ -428,6 +470,96 @@ class Storage:
     def blocked_symbols(self) -> list[str]:
         cur = self._conn.execute("SELECT symbol FROM blocked_symbols ORDER BY symbol")
         return [r["symbol"] for r in cur.fetchall()]
+
+    # -- wallet reputation ledger ---------------------------------------
+
+    def record_wallet_winner(self, wallet: str, token: str, mult: float = 0.0) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO wallet_winners (wallet, token, mult, ts) VALUES (?,?,?,?)",
+            (wallet.lower(), token.lower(), float(mult or 0.0), time.time()))
+        self._conn.commit()
+
+    def record_wallet_rug(self, wallet: str, token: str) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO wallet_rugs (wallet, token, ts) VALUES (?,?,?)",
+            (wallet.lower(), token.lower(), time.time()))
+        self._conn.commit()
+
+    def record_token_outcome(self, token: str, peak_mult: float, is_rug: bool) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO token_outcomes (token, peak_mult, is_rug, ts) "
+            "VALUES (?,?,?,?)",
+            (token.lower(), float(peak_mult or 0.0), 1 if is_rug else 0, time.time()))
+        self._conn.commit()
+
+    def record_deployer_token(self, deployer: str, token: str, outcome: str) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO deployer_tokens (deployer, token, outcome, ts) "
+            "VALUES (?,?,?,?)",
+            (deployer.lower(), token.lower(), outcome, time.time()))
+        self._conn.commit()
+
+    def wallet_reputation_rows(self, wallets: list[str]) -> dict:
+        """Bulk-load the raw reputation counters for a set of wallets.
+
+        Returns {wallet: {winner_overlap, rug_count, pick_wins, pick_total}} —
+        the inputs wallet_intel.quality() turns into a 0..1 score. One pass so
+        scoring a token's buyers is cheap.
+        """
+        out: dict = {}
+        if not wallets:
+            return out
+        ws = [w.lower() for w in wallets]
+        qs = ",".join("?" for _ in ws)
+        for w in ws:
+            out[w] = {"winner_overlap": 0, "rug_count": 0, "pick_wins": 0, "pick_total": 0}
+        for r in self._conn.execute(
+                f"SELECT wallet, COUNT(*) n FROM wallet_winners WHERE wallet IN ({qs}) "
+                "GROUP BY wallet", ws):
+            out[r["wallet"]]["winner_overlap"] = r["n"]
+        for r in self._conn.execute(
+                f"SELECT wallet, COUNT(*) n FROM wallet_rugs WHERE wallet IN ({qs}) "
+                "GROUP BY wallet", ws):
+            out[r["wallet"]]["rug_count"] = r["n"]
+        # Forward picks: tokens each wallet bought that now have a settled outcome.
+        for r in self._conn.execute(
+                f"SELECT sb.wallet AS wallet, "
+                "  SUM(CASE WHEN o.peak_mult >= 2.0 THEN 1 ELSE 0 END) AS wins, "
+                "  COUNT(*) AS total "
+                "FROM smart_buys sb JOIN token_outcomes o ON o.token = sb.token "
+                f"WHERE sb.wallet IN ({qs}) GROUP BY sb.wallet", ws):
+            out[r["wallet"]]["pick_wins"] = r["wins"] or 0
+            out[r["wallet"]]["pick_total"] = r["total"] or 0
+        return out
+
+    def core_alpha_wallets(self, min_overlap: int) -> list[str]:
+        """Wallets that were early on >= min_overlap DISTINCT winners."""
+        cur = self._conn.execute(
+            "SELECT wallet FROM wallet_winners GROUP BY wallet "
+            "HAVING COUNT(*) >= ?", (min_overlap,))
+        return [r["wallet"] for r in cur.fetchall()]
+
+    def toxic_wallets(self, min_rugs: int = 1) -> set:
+        cur = self._conn.execute(
+            "SELECT wallet FROM wallet_rugs GROUP BY wallet HAVING COUNT(*) >= ?",
+            (min_rugs,))
+        return {r["wallet"] for r in cur.fetchall()}
+
+    def deployer_reputation(self, deployer: str) -> dict:
+        row = self._conn.execute(
+            "SELECT SUM(CASE WHEN outcome='winner' THEN 1 ELSE 0 END) wins, "
+            "SUM(CASE WHEN outcome='rug' THEN 1 ELSE 0 END) rugs, COUNT(*) total "
+            "FROM deployer_tokens WHERE deployer = ?", (deployer.lower(),)).fetchone()
+        return {"wins": (row["wins"] or 0), "rugs": (row["rugs"] or 0),
+                "total": (row["total"] or 0)}
+
+    def top_reputation_wallets(self, limit: int = 20) -> list[dict]:
+        """Wallets ranked by winner-overlap (for the /alpha review command)."""
+        rows = self._conn.execute(
+            "SELECT wallet, COUNT(*) n, MAX(mult) best FROM wallet_winners "
+            "GROUP BY wallet ORDER BY n DESC, best DESC LIMIT ?", (limit,)).fetchall()
+        return [{"wallet": r["wallet"], "overlap": r["n"], "best_mult": r["best"] or 0}
+                for r in rows]
 
     # -- smart-money cluster tracking -----------------------------------
 

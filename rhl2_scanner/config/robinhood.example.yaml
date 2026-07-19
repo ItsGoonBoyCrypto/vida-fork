@@ -243,6 +243,16 @@ runtime:
   # that actually separated winners from rugs (see /perf "By signal"). Tight
   # leash: dormant until min_settled, tiny steps, hard-clamped to baseline ±
   # max_drift, fully reversible with `/autotune reset`.
+  # --- Wallet reputation (self-curating smart set) ---
+  # The smart set is quality-weighted, not a flat headcount: a wallet early on
+  # many winners outweighs unproven harvests, repeat-ruggers get tokens demoted,
+  # and a proven multi-winner wallet fires a 💎 alert on its own. Build it with
+  # /harvest (winners) + /harvestrug (rugs); review with /alpha + /deployers.
+  core_alpha_min_overlap: 3        # distinct winners for a wallet to be "core alpha"
+  core_alpha_alert: true           # fire 💎 on a core-alpha single-wallet buy
+  toxic_min_rugs: 2                # distinct rugs (net vs winners) → toxic → demote
+  rug_peak_mult_ceiling: 0.5       # a token whose peak fell to/below this = rug
+
   autotune_enabled: false
   autotune_min_settled: 30            # dormant until this many alerts have settled
   autotune_min_bucket: 5             # min samples in a high/low bucket for its edge to count

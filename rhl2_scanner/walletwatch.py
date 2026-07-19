@@ -191,6 +191,21 @@ def format_cluster_html(symbol: str, token: str, labels: list[str],
     return "\n".join(lines)
 
 
+def format_core_alpha_html(symbol: str, token: str, label: str, overlap: int,
+                           chart_url: str = "") -> str:
+    """A single proven-across-many-winners wallet bought a token — strong on its own."""
+    from html import escape
+    ov = f" (early on {overlap} past winners)" if overlap else ""
+    lines = [
+        f"💎 <b>CORE ALPHA BUY</b> — {escape(label)}{ov} bought ${escape(symbol or '???')}",
+        f"CA: <code>{escape(token)}</code>",
+        "<i>A wallet with a proven multi-winner track record just aped in.</i>",
+    ]
+    if chart_url:
+        lines.append(f'<a href="{escape(chart_url)}">Chart</a>')
+    return "\n".join(lines)
+
+
 def format_exit_html(symbol: str, token: str, label: str, usd, chart_url: str = "") -> str:
     """Smart money is selling a token smart money had bought — exit signal."""
     from html import escape

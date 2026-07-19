@@ -54,7 +54,7 @@ class TestHarvestSweep(unittest.IsolatedAsyncioTestCase):
         sc = Scanner(cfg)
         # stub the buyer harvest so no network is needed
         sc._harvested = []
-        async def fake_harvest(token, symbol, source_prefix):
+        async def fake_harvest(token, symbol, source_prefix, mult=0.0):
             sc._harvested.append((token, source_prefix))
             return 5
         sc._harvest_buyers = fake_harvest  # type: ignore

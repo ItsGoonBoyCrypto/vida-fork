@@ -235,12 +235,24 @@ def score_discovery(t: TokenSnapshot, th: Thresholds, weight: float) -> Category
             pts += 12
             cs.reasons.append(f"curve {p:.0f}% (pre-grad)")
 
-    # Smart money
+    # Smart money — quality-weighted when the reputation ledger has scored these
+    # buyers (two proven sharps beat five unproven harvests), else flat headcount.
     n_smart = len(t.smart_money_wallets)
-    if n_smart:
+    if t.smart_money_quality_bonus is not None:
+        pts += t.smart_money_quality_bonus
+        if t.core_alpha_wallets:
+            cs.reasons.append(f"{len(t.core_alpha_wallets)} core-alpha wallet(s) in")
+        elif n_smart >= th.smart_money_min_wallets:
+            cs.reasons.append(f"{n_smart} smart wallets (rep-weighted)")
+    elif n_smart:
         pts += min(35.0, 15.0 * n_smart)
         if n_smart >= th.smart_money_min_wallets:
             cs.reasons.append(f"{n_smart} smart wallets")
+
+    # Toxic demotion: a known rug/dumper among the buyers is a real red flag.
+    if t.toxic_buyer:
+        pts -= 20.0
+        cs.penalties.append("toxic wallet (rug/dumper) among buyers")
 
     # Socials present
     if t.socials:

@@ -40,7 +40,7 @@ class TestManualHarvest(unittest.IsolatedAsyncioTestCase):
         async def fake_one(ca):
             return _fake_info(ca)
 
-        async def fake_buyers(token, symbol, source_prefix):
+        async def fake_buyers(token, symbol, source_prefix, mult=0.0):
             # simulate harvesting 3 early buyers into the smart set
             for i in range(3):
                 sc._add_smart_wallet(f"0x{i:040x}", source=f"{source_prefix}:{token}",
@@ -74,7 +74,7 @@ class TestManualHarvest(unittest.IsolatedAsyncioTestCase):
         async def fake_one(ca):
             return _fake_info(ca)
 
-        async def fake_buyers(token, symbol, source_prefix):
+        async def fake_buyers(token, symbol, source_prefix, mult=0.0):
             return 0
 
         sc._send_html = fake_send             # type: ignore
@@ -142,7 +142,7 @@ class TestManualHarvest(unittest.IsolatedAsyncioTestCase):
             info["metrics"]["bundle_supply_pct"] = 71.2   # heavily bundled (like $FLETCH)
             return info
 
-        async def fake_buyers(token, symbol, source_prefix):
+        async def fake_buyers(token, symbol, source_prefix, mult=0.0):
             harvested["called"] = True
             return 9
         sc._calibrate_one = fake_one          # type: ignore
