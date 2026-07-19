@@ -59,6 +59,15 @@ REGISTRY: dict = {
         goplus_chain_id="1",
         # TODO: Uniswap V2/V3 factory, WETH
     ),
+    Chain.BNB: ChainConfig(
+        chain=Chain.BNB, dexscreener_slug="bsc",
+        rpc_url="",                        # TODO: a BSC RPC
+        # No canonical Blockscout-v2 for BSC → smart-money buyer fetch is
+        # best-effort (empty) until an explorer is wired; discovery (DexScreener)
+        # + safety (GoPlus chain 56) + signature scoring all work fully.
+        explorer_api_url="",
+        goplus_chain_id="56",
+    ),
     Chain.SOLANA: ChainConfig(
         chain=Chain.SOLANA, dexscreener_slug="solana",
         rpc_url="",                        # TODO: Helius / Solana RPC

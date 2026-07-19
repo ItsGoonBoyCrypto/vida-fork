@@ -15,7 +15,7 @@ from .models import Chain, Screen
 log = logging.getLogger("memelab.alerting")
 
 _CHAIN_EMOJI = {Chain.ROBINHOOD: "🪙", Chain.SOLANA: "◎",
-                Chain.ETHEREUM: "Ξ", Chain.BASE: "🔵"}
+                Chain.ETHEREUM: "Ξ", Chain.BASE: "🔵", Chain.BNB: "🟡"}
 
 
 def format_screen_html(scr: Screen, signature_precision: Optional[float] = None) -> str:

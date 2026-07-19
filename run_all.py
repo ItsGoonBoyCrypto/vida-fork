@@ -45,7 +45,7 @@ async def _run_collector() -> None:
     from memelab.models import Chain
 
     chains = [Chain(c.strip()) for c in os.environ.get(
-        "MEMELAB_CHAINS", "robinhood,solana,ethereum,base").split(",") if c.strip()]
+        "MEMELAB_CHAINS", "robinhood,solana,ethereum,base,bsc").split(",") if c.strip()]
     db = os.environ.get("MEMELAB_DB", "/app/data/memelab.db")
     await _collect(chains, db)
 
@@ -87,7 +87,7 @@ async def main() -> None:
     # (via TELEGRAM_* fallback in _collect). To avoid double alerts on robinhood,
     # the scanner owns robinhood and memelab alerts only on the other chains.
     if scanner_on and memelab_on and "MEMELAB_ALERT_CHAINS" not in os.environ:
-        os.environ["MEMELAB_ALERT_CHAINS"] = "solana,ethereum,base"
+        os.environ["MEMELAB_ALERT_CHAINS"] = "solana,ethereum,base,bsc"
 
     parts = []
     if os.environ.get("RUN_SCANNER", "1") != "0":

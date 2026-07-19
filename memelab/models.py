@@ -17,10 +17,11 @@ class Chain(str, Enum):
     SOLANA = "solana"
     ETHEREUM = "ethereum"
     BASE = "base"
+    BNB = "bsc"            # BNB Smart Chain — DexScreener slug is "bsc"
 
     @property
     def is_evm(self) -> bool:
-        return self in (Chain.ROBINHOOD, Chain.ETHEREUM, Chain.BASE)
+        return self in (Chain.ROBINHOOD, Chain.ETHEREUM, Chain.BASE, Chain.BNB)
 
 
 class Outcome(str, Enum):
