@@ -38,7 +38,7 @@ def format_screen_html(scr: Screen, signature_precision: Optional[float] = None)
         lines.append("Why: " + ", ".join(escape(r) for r in scr.reasons[:6]))
     links = []
     if s.pair_address:
-        links.append(f'<a href="https://dexscreener.com/{s.chain.value}/{s.pair_address}">Chart</a>')
+        links.append(f'<a href="https://dexscreener.com/{s.chain.value}/{escape(s.pair_address)}">Chart</a>')
     for label, url in _social_links(s.socials):
         links.append(f'<a href="{escape(url)}">{label}</a>')
     if links:

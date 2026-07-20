@@ -465,6 +465,15 @@ class RuntimeConfig:
     # Calibration digest auto-posted to the alert channel.
     paper_digest_enabled: bool = False
     paper_digest_interval_hours: float = 24.0  # how often to post (e.g. 1 = hourly)
+
+    # --- scanner.db backups ---
+    # The reputation ledger + blocklists are irreplaceable; back them up daily
+    # (rotating keep-N alongside the DB) and ship the newest copy to the alert
+    # chat weekly (Telegram sendDocument = a zero-infra OFF-VOLUME copy that
+    # survives Railway volume loss). Set ship_days=0 to disable shipping.
+    db_backup_enabled: bool = True
+    db_backup_keep: int = 7
+    db_backup_ship_days: float = 7.0
     paper_digest_win_multiple: float = 2.0
     # --- Bounded auto-tune of scoring weights ---
     # Once enough alerts have settled, nudge the category weights toward the

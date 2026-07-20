@@ -68,6 +68,10 @@ class TraderConfig:
                 c.slippage_pct = float(v)
             except ValueError:
                 pass
+        # Clamp: 0/negative would inflate quotes, >50% tolerates near-total
+        # value loss to an MEV sandwich once live. Fat fingers happen.
+        if not (0.0 < c.slippage_pct <= 50.0):
+            c.slippage_pct = 15.0
         c.auto_tp = env.get("TRADER_AUTO_TP", "0").lower() in ("1", "true", "yes")
         for key, attr in (("TRADER_BUY_PRESETS", "buy_presets"),
                           ("TRADER_PER_TRADE_CAP", "per_trade_cap"),

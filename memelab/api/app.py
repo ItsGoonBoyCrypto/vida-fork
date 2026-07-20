@@ -90,13 +90,27 @@ def create_app(db: str = "memelab.db"):
                 "summary": store.reputation_summary(),
                 "quality_in_signature": in_signature}
 
+    def _admin_denied(x_admin_key: str, payload: dict) -> str:
+        """Fail-closed guard for mutating routes. '' = allowed.
+
+        Without a configured MEMELAB_ADMIN_KEY these routes would be open to the
+        public internet on the Railway domain — letting anyone poison the
+        smart-money set. No key configured = mutations refused, full stop.
+        """
+        key = os.environ.get("MEMELAB_ADMIN_KEY", "")
+        if not key:
+            return ("mutations disabled: set MEMELAB_ADMIN_KEY on the service "
+                    "and pass it as the X-Admin-Key header")
+        if (x_admin_key or payload.get("key")) != key:
+            return "unauthorized"
+        return ""
+
     @api.post("/smart-wallets")
     def smart_wallets_add(payload: dict = Body(default={}),
                           x_admin_key: str = Header(default="")):
-        # Optional guard: if MEMELAB_ADMIN_KEY is set, require it (header or body).
-        key = os.environ.get("MEMELAB_ADMIN_KEY", "")
-        if key and (x_admin_key or payload.get("key")) != key:
-            return {"ok": False, "error": "unauthorized"}
+        denied = _admin_denied(x_admin_key, payload)
+        if denied:
+            return {"ok": False, "error": denied}
         chain_s = str(payload.get("chain") or "robinhood").strip().lower()
         wallet = str(payload.get("wallet") or "").strip()
         remove = bool(payload.get("remove"))
@@ -118,9 +132,9 @@ def create_app(db: str = "memelab.db"):
                       x_admin_key: str = Header(default="")):
         """Feed a confirmed winner: harvest its earliest buyers into the smart set
         (the sound, chain-correct signal) and record it as an exemplar."""
-        key = os.environ.get("MEMELAB_ADMIN_KEY", "")
-        if key and (x_admin_key or payload.get("key")) != key:
-            return {"ok": False, "error": "unauthorized"}
+        denied = _admin_denied(x_admin_key, payload)
+        if denied:
+            return {"ok": False, "error": denied}
         chain_s = str(payload.get("chain") or "").strip().lower()
         token = str(payload.get("token") or payload.get("address") or "").strip()
         try:

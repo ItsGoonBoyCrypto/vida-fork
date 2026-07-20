@@ -48,6 +48,33 @@ _RH_SEED = [
 _INFRA = {"0x0000000000000000000000000000000000000000",
           "0x000000000000000000000000000000000000dead"}
 
+# Well-known EVM routers/aggregators/MEV bots — token-transfer RECEIVERS that are
+# infrastructure, not buyers. Selling sends tokens TO the pair, and most swaps
+# route through these contracts, so without this filter the Uniswap router ends
+# up "buying" every token and gets promoted to the smart-money set. Blockscout's
+# is_contract flag catches the long tail; this curated set covers the Etherscan
+# fallback path (no contract flag there).
+_EVM_ROUTERS = {
+    "0x7a250d5630b4cf539739df2c5dacb4c659f2488d",  # Uniswap V2 Router02
+    "0xe592427a0aece92de3edee1f18e0157c05861564",  # Uniswap V3 SwapRouter
+    "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",  # Uniswap SwapRouter02
+    "0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad",  # Uniswap Universal Router
+    "0x6ff5693b99212da76ad316178a184ab56d299b43",  # Universal Router (Base)
+    "0x1111111254eeb25477b68fb85ed929f73a960582",  # 1inch v5
+    "0x1111111254fb6c44bac0bed2854e76f90643097d",  # 1inch v4
+    "0xdef1c0ded9bec7f1a1670819833240f027b25eff",  # 0x Exchange Proxy
+    "0x10ed43c718714eb63d5aa57b78b54704e256024e",  # PancakeSwap V2 Router
+    "0x13f4ea83d0bd40e75c8222255bc855a974568dd4",  # PancakeSwap V3 SmartRouter
+    "0xcf77a3ba9a5ca399b7c97c74d54e5b1beb874e43",  # Aerodrome Router (Base)
+    "0xae2fc483527b8ef99eb5d9b44875f005ba1fae13",  # jaredfromsubway (MEV)
+}
+
+# Solana infrastructure OWNERS (AMM authorities/lockers) — never "buyers".
+_SOL_INFRA = {
+    "5q544fkrfoe6tsebd7s8emxgtjyakttvhaw5q5pge4j1",  # Raydium V4 authority
+    "11111111111111111111111111111111",               # system program
+}
+
 
 def default_seeds() -> list:
     """[(Chain, wallet), …] seed set. Extend via env MEMELAB_SEED_WALLETS."""
@@ -189,6 +216,19 @@ class SmartMoney:
 
     # -- buyer sources --------------------------------------------------
 
+    def _excluded(self, chain: Chain, token: str) -> set:
+        """Addresses that must never count as buyers: burn sinks, known routers,
+        the token contract itself, and its own AMM pair (selling sends there)."""
+        ex = set(_INFRA) | _EVM_ROUTERS
+        ex.add(token.lower())
+        try:
+            pair = self.store.pair_address(chain, token)
+            if pair:
+                ex.add(pair.lower())
+        except Exception:  # noqa: BLE001
+            pass
+        return ex
+
     async def _buyers(self, chain: Chain, token: str) -> list:
         if chain.is_evm:
             return await self._evm_receivers(chain, token, newest_first=True)
@@ -196,12 +236,18 @@ class SmartMoney:
 
     async def _early_buyers(self, chain: Chain, token: str, n: int) -> list:
         if chain.is_evm:
-            recv = await self._evm_receivers(chain, token, newest_first=False)
+            # TRUE earliest = ascending sort. Etherscan does that natively;
+            # Blockscout pages newest-first, so reversing one page yields the
+            # oldest of the *recent* transfers — wrong for any active winner.
+            recv = await self._etherscan_receivers(chain, token, newest_first=False)
+            if not recv:
+                recv = await self._evm_receivers(chain, token, newest_first=False)
             return recv[:n]
         return (await self._solana_holders(token))[:n]
 
     async def _evm_receivers(self, chain: Chain, token: str, newest_first: bool) -> list:
         from .chains.registry import REGISTRY
+        excluded = self._excluded(chain, token)
         base = (REGISTRY[chain].explorer_api_url or "").rstrip("/")
         if base and self._session is not None:
             base = base + "/v2" if base.endswith("/api") else base
@@ -214,9 +260,13 @@ class SmartMoney:
                     break
                 for tx in items:
                     to = tx.get("to")
+                    # Blockscout marks contracts — pairs, routers, lockers, MEV
+                    # bots are all contracts, and none of them are "buyers".
+                    if isinstance(to, dict) and to.get("is_contract"):
+                        continue
                     addr = (to.get("hash") if isinstance(to, dict) else to) or ""
                     addr = addr.lower()
-                    if addr and addr not in _INFRA and addr not in out:
+                    if addr and addr not in excluded and addr not in out:
                         out.append(addr)
                 nxt = data.get("next_page_params")
                 if not nxt or len(out) >= 200:
@@ -235,6 +285,7 @@ class SmartMoney:
         key = os.environ.get("ETHERSCAN_API_KEY") or os.environ.get("BSCSCAN_API_KEY", "")
         if not cid or not key or self._session is None:
             return []
+        excluded = self._excluded(chain, token)
         params = {"chainid": cid, "module": "account", "action": "tokentx",
                   "contractaddress": token, "page": 1, "offset": 200,
                   "sort": "desc" if newest_first else "asc", "apikey": key}
@@ -245,18 +296,29 @@ class SmartMoney:
         out: list = []
         for tx in result:
             addr = (tx.get("to") or "").lower()
-            if addr and addr not in _INFRA and addr not in out:
+            if addr and addr not in excluded and addr not in out:
                 out.append(addr)
             if len(out) >= 200:
                 break
         return out
 
     async def _solana_holders(self, mint: str) -> list:
+        """Top-holder OWNER wallets (not token accounts) via RugCheck.
+
+        The `address` field is the per-mint token account (ATA) — using it means
+        the same human never matches across two tokens, so overlap can't accrue.
+        `owner` is the actual wallet. AMM authorities/lockers are filtered.
+        """
         if self._session is None:
             return []
         data = await self._get(f"https://api.rugcheck.xyz/v1/tokens/{mint}/report", None)
         holders = (data or {}).get("topHolders") or []
-        return [h.get("address", "").lower() for h in holders if h.get("address")]
+        out: list = []
+        for h in holders:
+            wallet = (h.get("owner") or h.get("address") or "").lower()
+            if wallet and wallet not in _SOL_INFRA and wallet not in out:
+                out.append(wallet)
+        return out
 
     async def _get(self, url: str, params: Optional[dict]):
         import asyncio

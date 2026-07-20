@@ -214,6 +214,15 @@ CREATE TABLE IF NOT EXISTS honeypot_deployers (
     ts         REAL NOT NULL
 );
 
+-- Trader daily spend ledger (native units per chain per UTC day). The daily-cap
+-- rail reads this — an in-memory tally would silently reset on every redeploy.
+CREATE TABLE IF NOT EXISTS trade_spends (
+    day    TEXT NOT NULL,             -- UTC date, YYYY-MM-DD
+    chain  TEXT NOT NULL,
+    spent  REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, chain)
+);
+
 -- Toxic funders: the wallet that FUNDED a known scam deployer (its first inbound
 -- native transfer). Scammers cycle throwaway deployer EOAs but reuse one funding
 -- source, so matching a new token's deployer-funder against this set catches the
@@ -240,6 +249,14 @@ class Storage:
                 os.makedirs(parent, exist_ok=True)
         self._conn = sqlite3.connect(path)
         self._conn.row_factory = sqlite3.Row
+        # WAL + busy_timeout: memelab's bridge reads this file read-only from a
+        # sibling coroutine; WAL keeps those reads non-blocking during commits.
+        if path and path != ":memory:":
+            try:
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA busy_timeout=5000")
+            except sqlite3.Error:
+                pass
         self._conn.executescript(_SCHEMA)
         self._migrate()
         self._conn.commit()
@@ -613,6 +630,36 @@ class Storage:
             "ORDER BY count DESC, ts DESC LIMIT ?", (limit,)).fetchall()
         return [{"deployer": r["deployer"], "count": r["count"],
                  "last_token": r["last_token"]} for r in rows]
+
+    @staticmethod
+    def _utc_day() -> str:
+        import datetime
+        return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+    def record_trade_spend(self, chain: str, amount_native: float) -> float:
+        """Add a live buy to today's spend for a chain. Returns the new total."""
+        day = self._utc_day()
+        self._conn.execute(
+            "INSERT INTO trade_spends (day, chain, spent) VALUES (?, ?, ?) "
+            "ON CONFLICT(day, chain) DO UPDATE SET spent = spent + excluded.spent",
+            (day, chain.lower(), float(amount_native)))
+        self._conn.commit()
+        return self.trade_spent_today(chain)
+
+    def trade_spent_today(self, chain: str) -> float:
+        """Native units spent on a chain today (UTC). Feeds the daily-cap rail."""
+        row = self._conn.execute(
+            "SELECT spent FROM trade_spends WHERE day = ? AND chain = ?",
+            (self._utc_day(), chain.lower())).fetchone()
+        return float(row["spent"]) if row else 0.0
+
+    def backup(self, dest_path: str) -> None:
+        """Online SQLite backup (safe while in use) — same as memelab's Store."""
+        dst = sqlite3.connect(dest_path)
+        try:
+            self._conn.backup(dst)
+        finally:
+            dst.close()
 
     def record_toxic_funder(self, funder: str, deployer: str, token: str) -> int:
         """Record the wallet that funded a scam deployer. Returns new count."""

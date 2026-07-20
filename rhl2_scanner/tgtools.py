@@ -91,6 +91,33 @@ async def answer_callback(token: str, callback_id: str, text: str = "",
             await session.close()
 
 
+async def send_document(token: str, chat_id: str, file_path: str, caption: str = "",
+                        session: Optional[aiohttp.ClientSession] = None) -> bool:
+    """Upload a file to a chat (used to ship DB backups off-volume weekly)."""
+    own = session is None
+    session = session or aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120))
+    try:
+        import os
+        form = aiohttp.FormData()
+        form.add_field("chat_id", str(chat_id))
+        if caption:
+            form.add_field("caption", caption[:1000])
+        with open(file_path, "rb") as fh:
+            form.add_field("document", fh.read(),
+                           filename=os.path.basename(file_path),
+                           content_type="application/octet-stream")
+        url = f"{_API}/bot{token}/sendDocument"
+        async with session.post(url, data=form) as resp:
+            data = await resp.json()
+            return bool(data and data.get("ok"))
+    except (aiohttp.ClientError, TimeoutError, ValueError, OSError) as exc:
+        log.warning("sendDocument failed: %s", exc)
+        return False
+    finally:
+        if own:
+            await session.close()
+
+
 async def discover_chats(token: str,
                          session: Optional[aiohttp.ClientSession] = None) -> list[dict]:
     """Return distinct chats seen in recent updates (id, title, type).

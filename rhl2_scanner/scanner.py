@@ -177,6 +177,8 @@ class Scanner:
             self._trader = TraderConfig.from_env()
         except Exception:  # noqa: BLE001
             self._trader = None
+        # Tokens with a buy currently executing (double-tap guard).
+        self._buys_inflight: set = set()
 
     # -- lifecycle -------------------------------------------------------
 
@@ -215,16 +217,74 @@ class Scanner:
                 except Exception:  # never let one cycle kill the loop
                     log.exception("scan cycle failed")
                 await self._maybe_send_digest()
-                await asyncio.wait(
-                    [asyncio.create_task(self._stop.wait())],
-                    timeout=self.cfg.runtime.poll_interval_seconds,
-                )
+                await self._maybe_backup_db()
+                waiter = asyncio.create_task(self._stop.wait())
+                await asyncio.wait([waiter],
+                                   timeout=self.cfg.runtime.poll_interval_seconds)
+                # Cancel the waiter on timeout — otherwise a fresh pending task
+                # accumulates in the Event's waiter list every cycle (leak).
+                if not waiter.done():
+                    waiter.cancel()
         finally:
             await self._session.close()
             self.storage.close()
 
     def stop(self) -> None:
         self._stop.set()
+
+    async def _maybe_backup_db(self) -> None:
+        """Daily on-volume backup (rotating) + weekly off-volume ship to the
+        alert chat. The wallet-reputation ledger and blocklists are the one
+        thing a volume failure can't regrow — this makes them recoverable."""
+        rc = self.cfg.runtime
+        if not rc.db_backup_enabled or self.storage.path in ("", ":memory:"):
+            return
+        import datetime
+        import glob
+        import os
+        now = time.time()
+        try:
+            last = float(self.storage.kv_get("last_db_backup_ts") or 0)
+        except (TypeError, ValueError):
+            last = 0.0
+        if (now - last) < 24 * 3600:
+            return
+        day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
+        dest = f"{self.storage.path}.bak.{day}"
+        try:
+            self.storage.backup(dest)
+            self.storage.kv_set("last_db_backup_ts", str(now))
+            # Rotate: keep the newest N.
+            baks = sorted(glob.glob(f"{self.storage.path}.bak.*"))
+            for old in baks[:-max(1, rc.db_backup_keep)]:
+                try:
+                    os.remove(old)
+                except OSError:
+                    pass
+            log.info("scanner.db backed up -> %s (%d kept)", dest,
+                     min(len(baks), rc.db_backup_keep))
+        except Exception:  # noqa: BLE001
+            log.exception("scanner.db backup failed")
+            return
+        # Weekly off-volume copy via Telegram (survives volume loss entirely).
+        tg = self.cfg.telegram
+        if rc.db_backup_ship_days <= 0 or not (tg.bot_token and tg.alert_chat_id):
+            return
+        try:
+            last_ship = float(self.storage.kv_get("last_db_ship_ts") or 0)
+        except (TypeError, ValueError):
+            last_ship = 0.0
+        if (now - last_ship) < rc.db_backup_ship_days * 24 * 3600:
+            return
+        from .tgtools import send_document
+        ok = await send_document(
+            tg.bot_token, tg.alert_chat_id, dest,
+            caption=f"🗄 scanner.db weekly backup ({day}) — keep this file; it "
+                    "restores the wallet-reputation ledger and blocklists.",
+            session=self._session)
+        if ok:
+            self.storage.kv_set("last_db_ship_ts", str(now))
+            log.info("scanner.db backup shipped to alert chat")
 
     async def _send_html(self, text: str, reply_to: Optional[int] = None,
                          reply_markup: Optional[dict] = None) -> Optional[int]:
@@ -1408,6 +1468,25 @@ class Scanner:
         except Exception:  # noqa: BLE001
             return False
 
+    def _admin_ids(self) -> set:
+        """One operator allowlist: telegram admin ids ∪ trader admin ids.
+
+        Unifying them means arming the trader (TRADER_ADMIN_IDS) automatically
+        grants command access, and vice-versa — no way to mis-gate one surface
+        while securing the other.
+        """
+        ids: set = set()
+        try:
+            ids.update(int(i) for i in (self.cfg.telegram.admin_user_ids or []))
+        except (TypeError, ValueError):
+            pass
+        if self._trader is not None:
+            try:
+                ids.update(int(i) for i in (self._trader.admin_user_ids or []))
+            except (TypeError, ValueError):
+                pass
+        return ids
+
     def _buy_keyboard(self, snap: TokenSnapshot):
         """Inline buy buttons for an alert (None unless trading is enabled)."""
         if not self._trader or not self._trader.enabled:
@@ -1428,6 +1507,12 @@ class Scanner:
         data = cb.get("data") or ""
         msg = cb.get("message") or {}
         chat_id = str((msg.get("chat") or {}).get("id"))
+        # Replay guard: getUpdates re-delivers the pending backlog on restart —
+        # each callback id is processed exactly once, ever. Without this a
+        # redeploy would re-fire old buy taps (real buys, once live).
+        if cb_id and not self.storage.pos_event_new("cbq|" + str(cb_id)):
+            log.info("skipping already-processed buy callback %s", cb_id)
+            return
         try:
             from trader.buttons import parse_callback
             from trader.engine import preview_buy
@@ -1435,40 +1520,131 @@ class Scanner:
             if not parsed or self._trader is None:
                 return
             chain, token, idx = parsed
-            presets = self._trader.presets_for(chain)
-            amount = presets[idx] if idx < len(presets) else (presets[0] if presets else 0)
-            # Only tokens we actually alerted are buyable (allowlist rail). Check
-            # both DBs — memelab alerts its chains, the scanner alerts robinhood.
-            alerted = self.storage.token_alerted(token) or self._memelab_alerted(token)
-            # Native USD (EVM chains) so the preview can size the buy; SOL n/a here.
-            native_usd = self._eth_usd if chain != "solana" else None
-            log.info("BUY callback: %s %s amt=%s from=%s alerted=%s",
-                     chain, token, amount, from_id, alerted)
-            res = preview_buy(
-                chain, token, amount, from_id, symbol="token", alerted=alerted,
-                spent_today=0.0, cfg=self._trader, native_usd=native_usd)
-            # Immediate on-screen popup so the tap always gives visible feedback,
-            # independent of the channel message.
-            if res.ok:
-                popup = (f"🧪 DRY-RUN — would buy {amount:g} {res.native} on {chain}. "
-                         "No funds moved.")
-            else:
-                popup = f"🚫 {res.reason}"
-            if tg.bot_token and cb_id:
-                await answer_callback(tg.bot_token, cb_id, popup, self._session,
-                                      show_alert=True)
-            log.info("BUY result: ok=%s reason=%s", res.ok, res.reason)
-            # Also post the full preview to the alert chat (best-effort).
-            self._reply_chat = chat_id or tg.alert_chat_id
+            # In-flight lock: a double-tap (two distinct callback ids) must not
+            # run two buys for the same token concurrently.
+            flight_key = f"{chain}:{token.lower()}"
+            if flight_key in self._buys_inflight:
+                if tg.bot_token and cb_id:
+                    await answer_callback(tg.bot_token, cb_id,
+                                          "⏳ already processing this token",
+                                          self._session)
+                return
+            self._buys_inflight.add(flight_key)
             try:
-                await self._send_html(res.preview if res.ok else f"🚫 {res.reason}")
+                await self._execute_buy_callback(
+                    chain, token, idx, from_id, cb_id, chat_id)
             finally:
-                self._reply_chat = None
+                self._buys_inflight.discard(flight_key)
         except Exception:  # noqa: BLE001
             log.exception("buy callback failed")
             if tg.bot_token and cb_id:
                 await answer_callback(tg.bot_token, cb_id, "error handling buy",
                                       self._session, show_alert=True)
+
+    async def _execute_buy_callback(self, chain: str, token: str, idx: int,
+                                    from_id, cb_id, chat_id: str) -> None:
+        from .tgtools import answer_callback
+        from trader.engine import preview_buy
+        tg = self.cfg.telegram
+        presets = self._trader.presets_for(chain)
+        amount = presets[idx] if idx < len(presets) else (presets[0] if presets else 0)
+        # Only tokens we actually alerted are buyable (allowlist rail). Check
+        # both DBs — memelab alerts its chains, the scanner alerts robinhood.
+        alerted = self.storage.token_alerted(token) or self._memelab_alerted(token)
+        # Native USD (EVM chains) so the preview can size the buy; SOL n/a here.
+        native_usd = self._eth_usd if chain != "solana" else None
+        log.info("BUY callback: %s %s amt=%s from=%s alerted=%s",
+                 chain, token, amount, from_id, alerted)
+        # Buy-time safety re-check: "was alerted once" is NOT "safe to buy now".
+        # A token that turned honeypot since its alert must not be buyable.
+        veto = await self._buy_time_safety(chain, token)
+        if veto:
+            if tg.bot_token and cb_id:
+                await answer_callback(tg.bot_token, cb_id, f"🚫 {veto}",
+                                      self._session, show_alert=True)
+            log.info("BUY vetoed: %s %s — %s", chain, token, veto)
+            return
+        # Real, persisted daily spend — survives restarts, so the daily cap
+        # actually enforces (an in-memory 0.0 made it dead code).
+        spent = self.storage.trade_spent_today(chain)
+        res = preview_buy(
+            chain, token, amount, from_id, symbol="token", alerted=alerted,
+            spent_today=spent, cfg=self._trader, native_usd=native_usd)
+        # Ledger a LIVE buy the moment it succeeds (dry-run spends nothing).
+        if res.ok and not self._trader.dry_run:
+            self.storage.record_trade_spend(chain, amount)
+        # Immediate on-screen popup so the tap always gives visible feedback,
+        # independent of the channel message.
+        if res.ok:
+            popup = (f"🧪 DRY-RUN — would buy {amount:g} {res.native} on {chain}. "
+                     "No funds moved.")
+        else:
+            popup = f"🚫 {res.reason}"
+        if tg.bot_token and cb_id:
+            await answer_callback(tg.bot_token, cb_id, popup, self._session,
+                                  show_alert=True)
+        log.info("BUY result: ok=%s reason=%s", res.ok, res.reason)
+        # Also post the full preview to the alert chat (best-effort).
+        self._reply_chat = chat_id or tg.alert_chat_id
+        try:
+            await self._send_html(res.preview if res.ok else f"🚫 {res.reason}")
+        finally:
+            self._reply_chat = None
+
+    async def _buy_time_safety(self, chain: str, token: str) -> str:
+        """Re-validate a token's CURRENT safety at buy time. '' = ok, else reason.
+
+        The allowlist proves the token was alerted once; this proves it hasn't
+        turned into a trap since. Robinhood re-runs the live sell-sim; memelab
+        chains read the latest recorded safety verdict. Unknown stays buyable
+        (dry-run today; Phase 2 may tighten) — confirmed-bad always blocks.
+        """
+        token_l = token.lower()
+        try:
+            if self.storage.is_muted(token_l):
+                return "token is muted (/zero) — buy blocked"
+        except Exception:  # noqa: BLE001
+            pass
+        rc = self.cfg.runtime
+        if chain == "robinhood":
+            try:
+                from .simulator import HoneypotSimulator
+                snap = TokenSnapshot(chain="robinhood", pair_address="",
+                                     token_address=token_l)
+                report = await HoneypotSimulator(self.cfg, session=self._session).check(snap)
+                if report.is_honeypot is True:
+                    return "sell-sim says HONEYPOT right now"
+                tax = report.sell_tax_pct
+                if tax is not None and tax >= rc.honeypot_sell_tax_pct:
+                    return f"sell tax {tax:.0f}% right now — trap-level"
+            except Exception:  # noqa: BLE001
+                log.debug("buy-time sell-sim failed", exc_info=True)
+            return ""
+        # memelab chains: latest stored safety verdict (read-only cross-DB).
+        try:
+            import json as _json
+            import os
+            import sqlite3 as _sq
+            db = os.environ.get("MEMELAB_DB", "")
+            if db and os.path.exists(db):
+                uri = f"file:{db}?mode=ro"
+                con = _sq.connect(uri, uri=True)
+                try:
+                    row = con.execute(
+                        "SELECT json FROM snapshots WHERE token_address = ? "
+                        "ORDER BY ts DESC LIMIT 1", (token_l,)).fetchone()
+                finally:
+                    con.close()
+                if row:
+                    d = _json.loads(row[0])
+                    if d.get("is_honeypot") is True:
+                        return "latest scan says HONEYPOT"
+                    tax = d.get("sell_tax_pct")
+                    if tax is not None and float(tax) >= rc.honeypot_sell_tax_pct:
+                        return f"latest scan: sell tax {float(tax):.0f}% — trap-level"
+        except Exception:  # noqa: BLE001
+            log.debug("buy-time memelab safety read failed", exc_info=True)
+        return ""
 
     async def _poll_commands(self) -> None:
         """Receive /zero /unzero /muted from the alert channel and act on them."""
@@ -1509,9 +1685,24 @@ class Scanner:
             from_id = (msg.get("from") or {}).get("id")
             is_alert = chat_id == str(tg.alert_chat_id)
             is_private = chat.get("type") == "private"          # a DM to the bot
-            is_admin = bool(tg.admin_user_ids) and from_id in tg.admin_user_ids
-            if not (is_alert or is_private or is_admin):
-                log.info("ignoring command from chat %s (not alert chat / DM / admin)", chat_id)
+            is_admin = from_id is not None and from_id in self._admin_ids()
+            # Authorization: the alert channel is the operator's own private
+            # surface (channel posts carry no from-id, so it's the trust
+            # boundary). Everything else — DMs included — requires an admin
+            # from-id. A DM used to bypass this entirely, letting any Telegram
+            # user who found the bot poison /smart, /zero, /forgetfunder, etc.
+            if not (is_alert or is_admin):
+                log.info("refusing command from %s (chat %s): not the alert "
+                         "channel and not an admin", from_id, chat_id)
+                if is_private and tg.bot_token:
+                    self._reply_chat = chat_id
+                    try:
+                        await self._send_html(
+                            "🔒 Not authorized. This bot only accepts commands "
+                            "from its operator (TELEGRAM_ADMIN_IDS / "
+                            "TRADER_ADMIN_IDS).")
+                    finally:
+                        self._reply_chat = None
                 continue
             log.info("command: %s (chat=%s)", text, chat_id)
             self._reply_chat = chat_id      # reply where the command came from

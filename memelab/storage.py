@@ -160,6 +160,15 @@ class Store:
         # collector is single-threaded async and unaffected.
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # WAL lets the API's threadpool reads proceed during collector commits,
+        # and busy_timeout turns "database is locked" into a short wait — this
+        # process has three writers (collector, API POSTs) on one file.
+        if path != ":memory:":
+            try:
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA busy_timeout=5000")
+            except sqlite3.Error:
+                pass
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
@@ -198,7 +207,20 @@ class Store:
             entry = snap.price_usd
         else:
             entry = row["entry_price"]
-            if entry and snap.price_usd:
+            if not entry and snap.price_usd:
+                # Backfill: adapter-discovered tokens (factory events, curve
+                # stubs) insert before a price exists. The FIRST priced snapshot
+                # becomes the entry anchor — without this, peak/trough never
+                # compute and the earliest-caught tokens are excluded from
+                # training forever (survivorship bias toward late discoveries).
+                entry = snap.price_usd
+                self._conn.execute(
+                    "UPDATE tokens SET entry_price = ?, last_snapshot_ts = ?, "
+                    "pair_address = COALESCE(NULLIF(pair_address, ''), ?), "
+                    "symbol = COALESCE(NULLIF(symbol, ''), ?) "
+                    "WHERE chain = ? AND token_address = ?",
+                    (entry, ts, snap.pair_address, snap.symbol, ch, addr))
+            elif entry and snap.price_usd:
                 mult = snap.price_usd / entry
                 self._conn.execute(
                     "UPDATE tokens SET peak_multiple = MAX(peak_multiple, ?), "
@@ -215,6 +237,14 @@ class Store:
             (ch, addr, ts, snap.price_usd, snap.market_cap_usd, snap.liquidity_usd,
              _snap_to_json(snap)))
         self._conn.commit()
+
+    def pair_address(self, chain: Chain, token_address: str) -> str:
+        """The token's recorded AMM pair ('' if unknown) — used to exclude the
+        pool from buyer sets (selling sends tokens *to* the pair)."""
+        row = self._conn.execute(
+            "SELECT pair_address FROM tokens WHERE chain = ? AND token_address = ?",
+            (chain.value, token_address.lower())).fetchone()
+        return (row["pair_address"] or "") if row else ""
 
     def tracked_tokens(self, chain: Optional[Chain] = None,
                        max_age_hours: float = 72.0) -> list[sqlite3.Row]:
