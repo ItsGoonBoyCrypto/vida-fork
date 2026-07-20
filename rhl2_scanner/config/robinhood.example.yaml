@@ -182,6 +182,9 @@ tiers:
       max_tax_pct: 1                # HARD skip if KNOWN tax above 1% each
       min_lp_lock_seconds: 0        # 0 = any lock duration accepted
       require_contract_verified: false  # RH Chain barely verifies contracts.
+      gate_owner_rug: true          # suppress tokens whose live (non-renounced)
+                                    # owner can flip tax / blacklist / pause / mint
+                                    # (detected from bytecode). false = demote+warn.
       ideal_mcap_low: 15000
       ideal_mcap_high: 100000
       ideal_holders: 120            # was 300 — small gems reach full holder score sooner

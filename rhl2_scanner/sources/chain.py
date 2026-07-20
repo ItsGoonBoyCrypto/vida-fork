@@ -132,6 +132,12 @@ class EvmChainClient:
             report.freeze_authority_revoked = True
         # else: leave None (unknown) — pragmatic mode tolerates, strict gates.
 
+        # Owner-mutability: can the owner still flip the tax / blacklist sellers /
+        # mint AFTER people buy? A token clean now can rug the moment the owner
+        # calls setFees(99). Detect the capability from the bytecode (works even
+        # unverified) and pair it with the live owner() to know it's exploitable.
+        await self._assess_owner_mutability(token, owner, report)
+
         # LP safety: is the LP token burned (dead balance ~= supply)? (V2-style)
         report.lp_burned = await self._lp_burned(snap.pair_address)
 
@@ -227,6 +233,31 @@ class EvmChainClient:
             if res and len(res) >= 66:
                 return "0x" + res[-40:]
         return None
+
+    async def _assess_owner_mutability(self, token: str, owner: Optional[str],
+                                       report: SafetyReport) -> None:
+        """Set owner_active / owner_hooks / owner_can_rug on the report.
+
+        owner_can_rug requires BOTH a live (non-renounced) owner AND a gate-worthy
+        capability (settable tax, blacklist, pause, mint) in the bytecode. A
+        renounced owner neutralises the hooks; an unknown owner leaves the verdict
+        unknown (tolerated by the pragmatic gate, gated under strict).
+        """
+        from ..owner_audit import owner_is_active, scan_bytecode
+        report.owner_active = owner_is_active(owner, BURN_ADDRESSES)
+        code = await self._get_code(token)
+        if not code:
+            return
+        scan = scan_bytecode(code)
+        report.owner_hooks = scan["hooks"]
+        if report.owner_active is True and scan["can_rug"]:
+            report.owner_can_rug = True
+        elif report.owner_active is False:
+            report.owner_can_rug = False        # renounced -> hooks are inert
+        # active unknown + hooks present -> leave None (surfaced as caution, not gated)
+
+    async def _get_code(self, token: str) -> Optional[str]:
+        return await self._rpc("eth_getCode", [token, "latest"])
 
     async def _lp_burned(self, pair: str) -> Optional[bool]:
         total = await self._eth_call(pair, _SEL_TOTAL_SUPPLY)

@@ -128,6 +128,14 @@ class TestMerge(unittest.TestCase):
         self.assertIsNone(m.mint_authority_revoked)
         self.assertIsNone(m.is_honeypot)
 
+    def test_owner_rug_danger_wins_and_hooks_union(self):
+        a = SafetyReport(owner_can_rug=None, owner_hooks=["owner can set fees"])
+        b = SafetyReport(owner_can_rug=True, owner_hooks=["owner can blacklist wallets"])
+        m = merge_reports(a, b)
+        self.assertTrue(m.owner_can_rug)          # any True danger wins
+        self.assertEqual(set(m.owner_hooks),
+                         {"owner can set fees", "owner can blacklist wallets"})
+
     def test_safe_requires_confirmation_and_no_contradiction(self):
         a = SafetyReport(mint_authority_revoked=True)
         b = SafetyReport(mint_authority_revoked=False)

@@ -51,6 +51,13 @@ class SafetyReport:
     # Bundle / clustered-wallet detection
     bundle_supply_pct: Optional[float] = None       # % of supply in clustered wallets
     sniper_cluster_pct: Optional[float] = None      # % bought in same/near launch blocks
+    # Owner-mutability: a token clean *now* whose owner can still flip the tax,
+    # blacklist sellers, or mint. owner_active = ownership not renounced; owner_hooks
+    # = the dangerous owner-only capabilities found in the bytecode; owner_can_rug =
+    # active owner AND a critical hook present (a live post-buy rug vector).
+    owner_active: Optional[bool] = None
+    owner_can_rug: Optional[bool] = None
+    owner_hooks: list[str] = field(default_factory=list)
 
     @property
     def lp_safe(self) -> bool:

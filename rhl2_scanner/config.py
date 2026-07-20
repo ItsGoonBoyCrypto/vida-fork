@@ -259,6 +259,10 @@ class Thresholds:
     # the honeypot sim + distribution + LP checks. Turn on for chains where
     # verification is the norm.
     require_contract_verified: bool = False
+    # Gate tokens whose owner can still rug post-buy: ownership NOT renounced AND
+    # the bytecode exposes an owner-only tax/blacklist/pause/mint hook. A confirmed
+    # live rug vector — suppress the alert. Set False to only demote+warn instead.
+    gate_owner_rug: bool = True
 
     # Momentum
     min_volume_24h_usd: float = 10_000

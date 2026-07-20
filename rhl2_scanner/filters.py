@@ -129,6 +129,13 @@ def safety_gate(t: TokenSnapshot, th: Thresholds, strict: bool = True,
     elif s.is_honeypot is None and strict and not tolerate_unknown:
         fails.append("honeypot status unconfirmed")
 
+    # Owner can still rug post-buy (live owner + settable tax / blacklist / pause /
+    # mint in the bytecode). A CONFIRMED capability, so it fails even under
+    # pragmatic — this is the "clean now, flips the tax later" vector. Tunable off.
+    if s.owner_can_rug is True and getattr(th, "gate_owner_rug", True):
+        hook = f" ({s.owner_hooks[0]})" if s.owner_hooks else ""
+        fails.append(f"owner can rug post-buy{hook}")
+
     # --- Taxes ---
     for tax, label in ((s.buy_tax_pct, "buy"), (s.sell_tax_pct, "sell")):
         if tax is not None and tax > th.max_tax_pct:

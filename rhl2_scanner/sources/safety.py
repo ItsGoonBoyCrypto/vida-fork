@@ -72,6 +72,16 @@ def merge_reports(*reports: SafetyReport) -> SafetyReport:
     # Danger-when-True facts.
     out.is_honeypot = _or_danger(*[r.is_honeypot for r in reports])
     out.dev_recent_sell = _or_danger(*[r.dev_recent_sell for r in reports])
+    out.owner_can_rug = _or_danger(*[r.owner_can_rug for r in reports])
+    out.owner_active = _or_danger(*[r.owner_active for r in reports])
+
+    # Union of owner-capability hooks (for display).
+    hooks: list[str] = []
+    for r in reports:
+        for h in r.owner_hooks:
+            if h not in hooks:
+                hooks.append(h)
+    out.owner_hooks = hooks
 
     # Worst-case numeric facts.
     out.buy_tax_pct = _max_opt(*[r.buy_tax_pct for r in reports])

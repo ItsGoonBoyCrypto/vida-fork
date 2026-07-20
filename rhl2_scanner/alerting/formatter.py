@@ -165,6 +165,19 @@ def _contract_line(snap: TokenSnapshot) -> str:
     return line
 
 
+def _owner_line(snap: TokenSnapshot) -> str:
+    """Owner-mutability read: renounced (green) vs. still able to change the rules."""
+    s = snap.safety
+    if s.owner_can_rug is True:
+        hook = f" — {escape(s.owner_hooks[0])}" if s.owner_hooks else ""
+        return f"🔓 Owner: ⚠️ can rug post-buy{hook}"
+    if s.owner_active is False:
+        return "🔒 Ownership renounced"
+    if s.owner_active is True and s.owner_hooks:
+        return f"🔓 Owner active — {escape(s.owner_hooks[0])} (not renounced)"
+    return ""
+
+
 def _exit_line(snap: TokenSnapshot) -> str:
     return f"🎚 Exit plan: {escape(snap.exit_target)}" if snap.exit_target else ""
 
@@ -301,6 +314,9 @@ def format_early_launch_html(snap: TokenSnapshot, result: ScoreResult) -> str:
     contract = _contract_line(snap)
     if contract:
         lines.append(contract)
+    owner = _owner_line(snap)
+    if owner:
+        lines.append(owner)
     smart = _smart_line(snap)
     if smart:
         lines.append(smart)
