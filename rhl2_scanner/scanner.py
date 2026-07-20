@@ -1483,6 +1483,52 @@ class Scanner:
         except Exception:  # noqa: BLE001
             return False
 
+    def _pnl_card(self) -> str:
+        """A compact, shareable performance card from the tracked-alert history —
+        overall hit/rug rates, peak multiples, top movers, and by-conviction
+        buckets. Pure read of paper/perf data; no signing involved."""
+        from html import escape as _esc
+        rows = self.storage.all_paper_trades()
+        if not rows:
+            return ("📊 <b>PnL card</b>\nNo alerts tracked yet — this fills in as "
+                    "alerts fire and their outcomes settle.")
+        win = self.cfg.runtime.paper_digest_win_multiple or 2.0
+        n = len(rows)
+        settled = sum(1 for r in rows if r["settled"])
+        peaks = [(r["max_mult"] or 1.0) for r in rows]
+        troughs = [(r["min_mult"] or 1.0) for r in rows]
+        hits = sum(1 for m in peaks if m >= win)
+        rugs = sum(1 for m in troughs if m <= 0.5)
+        avg_peak = sum(peaks) / n
+        best = max(peaks)
+        best_row = max(rows, key=lambda r: (r["max_mult"] or 1.0))
+        # top movers by peak multiple
+        movers = sorted(rows, key=lambda r: -(r["max_mult"] or 1.0))[:3]
+        lines = [
+            "📊 <b>PnL card</b> — tracked alert performance",
+            f"Alerts: <b>{n}</b> ({settled} settled) · Hit ≥{win:g}x: "
+            f"<b>{hits/n:.0%}</b> · Rug: {rugs/n:.0%}",
+            f"Avg peak <b>{avg_peak:.2f}x</b> · Best <b>{best:.1f}x</b> "
+            f"(${_esc(best_row['symbol'] or '?')})",
+        ]
+        if movers:
+            tops = " · ".join(f"${_esc(m['symbol'] or '?')} {m['max_mult'] or 1.0:.1f}x"
+                              for m in movers)
+            lines.append("🏆 Top: " + tops)
+        # by-conviction buckets
+        buckets = [("70+", 70, 200), ("50-69", 50, 70), ("<50", 0, 50)]
+        bl = []
+        for label, lo, hi in buckets:
+            sub = [r for r in rows if lo <= (r["conviction"] or 0) < hi]
+            if sub:
+                sp = [(r["max_mult"] or 1.0) for r in sub]
+                bl.append(f"{label}: {sum(1 for m in sp if m >= win)/len(sub):.0%} hit "
+                          f"({len(sub)})")
+        if bl:
+            lines.append("🎯 By conviction — " + " · ".join(bl))
+        lines.append("<i>Paper-tracked from real alerts. Past ≠ future; size small.</i>")
+        return "\n".join(lines)
+
     def _admin_ids(self) -> set:
         """One operator allowlist: telegram admin ids ∪ trader admin ids.
 
@@ -1740,6 +1786,7 @@ class Scanner:
             "<code>/perf</code> — how your alerts have performed (peak x, hit/rug rate)",
             "<code>/pnl [tp] [sl]</code> — simulated P&amp;L if you traded the alerts "
             "(TP/SL, expectancy, drawdown, by-conviction)",
+            "<code>/pnlcard</code> — shareable performance card (hit/rug rate, top movers)",
             "<code>/inspect 0xCA</code> — trace one token through the full pipeline",
             "",
             "<b>Mute a token</b>",
@@ -1921,6 +1968,8 @@ class Scanner:
             rows = self.storage.all_paper_trades()
             p = strategy_pnl(rows, tp=tp, sl=sl)
             await self._send_html(format_pnl_html(p))
+        elif cmd in ("pnlcard", "card", "scorecard"):
+            await self._send_html(self._pnl_card())
         elif cmd in ("autotune", "weights"):
             from html import escape as _esc
             from . import autotune as _at
