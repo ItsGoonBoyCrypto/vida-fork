@@ -57,6 +57,9 @@ def is_blocked_symbol(t: TokenSnapshot, blocked: list[str]) -> bool:
         return True
     # Also block when the name reduces to exactly a blocked token (e.g. name
     # "ROBINHOOD" with a different ticker used to sneak past a symbol check).
+    # NB: deliberately NOT word-level/substring — "Robinhood Killer" and other
+    # legit memes that merely REFERENCE the brand must still alert; over-blocking
+    # costs real gems. See test_partial_name_not_blocked.
     if _norm_symbol(t.name) in wanted:
         return True
     return False

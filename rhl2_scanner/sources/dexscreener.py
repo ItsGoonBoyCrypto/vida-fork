@@ -13,6 +13,7 @@ timeouts, status checks, and shape-tolerant parsing (missing keys -> None).
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Optional
 
@@ -20,6 +21,8 @@ import aiohttp
 
 from ..config import Config
 from ..models import TokenSnapshot
+
+log = logging.getLogger("rhl2.dexscreener")
 
 _BASE = "https://api.dexscreener.com"
 
@@ -57,15 +60,36 @@ class DexScreenerClient:
         if self._owns_session and self._session is not None:
             await self._session.close()
 
+    # Discovery-health flag, readable via /diag: "ok" | "rate-limited" | "error".
+    health: str = "ok"
+
     async def _get(self, path: str) -> Optional[dict]:
         assert self._session is not None, "use as async context manager"
-        try:
-            async with self._session.get(f"{_BASE}{path}") as resp:
-                if resp.status != 200:
+        import asyncio
+        for attempt in range(3):
+            try:
+                async with self._session.get(f"{_BASE}{path}") as resp:
+                    if resp.status == 200:
+                        self.health = "ok"
+                        return await resp.json()
+                    if resp.status in (429, 502, 503, 504):
+                        # Back off instead of silently degrading to zero pairs —
+                        # and surface it so /diag shows the storm.
+                        self.health = "rate-limited"
+                        log.warning("dexscreener %s -> %d (attempt %d/3), backing off",
+                                    path, resp.status, attempt + 1)
+                        await asyncio.sleep(min(3.0, 0.5 * (2 ** attempt)))
+                        continue
+                    self.health = "error"
                     return None
-                return await resp.json()
-        except (aiohttp.ClientError, TimeoutError):
-            return None
+            except (aiohttp.ClientError, TimeoutError) as exc:
+                self.health = "error"
+                if attempt < 2:
+                    await asyncio.sleep(min(3.0, 0.5 * (2 ** attempt)))
+                    continue
+                log.warning("dexscreener %s failed: %s", path, exc)
+                return None
+        return None
 
     # -- Discovery -------------------------------------------------------
 

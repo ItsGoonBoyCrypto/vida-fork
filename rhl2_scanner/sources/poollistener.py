@@ -103,7 +103,15 @@ class PoolListener:
         self._session = session
         self._owns_session = session is None
         self._last_block: Optional[int] = None
+        self._checkpoint_cb = None      # optional (block:int)->None to persist progress
         self._rpc_id = 0
+
+    def set_checkpoint(self, last_block: Optional[int], on_advance=None) -> None:
+        """Seed the checkpoint from persisted state + a callback to persist it,
+        so a restart resumes from where discovery left off (no block gap)."""
+        if last_block is not None:
+            self._last_block = last_block
+        self._checkpoint_cb = on_advance
 
     async def __aenter__(self) -> "PoolListener":
         if self._session is None:
@@ -138,19 +146,35 @@ class PoolListener:
         snaps: dict[str, TokenSnapshot] = {}
 
         # Chunk the range so a single eth_getLogs never spans too many blocks.
+        # Advance the checkpoint only past chunks that actually SUCCEEDED — a
+        # failed chunk (rate-limit/timeout) must be retried next cycle, not
+        # skipped forever. So we stop advancing at the first failed range.
         start = from_block
+        confirmed = self._last_block
         while start <= head:
             end = min(start + self.chain.pool_scan_max_range - 1, head)
             logs = await self._get_logs(start, end, topic)
+            if logs is None:            # RPC failure — do NOT skip this range
+                log.warning("pool listener: getLogs %d-%d failed; will retry "
+                            "(checkpoint held at %d)", start, end, confirmed)
+                break
             for entry in logs:
                 snap = self._log_to_snapshot(entry)
                 if snap:
                     snaps[snap.pair_address.lower()] = snap
+            confirmed = end
             start = end + 1
 
-        self._last_block = head
+        if confirmed != self._last_block:
+            self._last_block = confirmed
+            if self._checkpoint_cb:
+                try:
+                    self._checkpoint_cb(confirmed)
+                except Exception:  # noqa: BLE001
+                    pass
         if snaps:
-            log.info("pool listener found %d new pairs (blocks %d-%d)", len(snaps), from_block, head)
+            log.info("pool listener found %d new pairs (blocks %d-%d)",
+                     len(snaps), from_block, confirmed)
         return list(snaps.values())
 
     def _log_to_snapshot(self, entry: dict) -> Optional[TokenSnapshot]:
@@ -216,7 +240,8 @@ class PoolListener:
         except (ValueError, TypeError):
             return None
 
-    async def _get_logs(self, from_block: int, to_block: int, topic0: str) -> list[dict]:
+    async def _get_logs(self, from_block: int, to_block: int, topic0: str):
+        """Return the log list, or None on RPC failure (distinct from empty)."""
         params = [{
             "fromBlock": hex(from_block),
             "toBlock": hex(to_block),
@@ -224,4 +249,4 @@ class PoolListener:
             "topics": [topic0],
         }]
         res = await self._rpc("eth_getLogs", params)
-        return res if isinstance(res, list) else []
+        return res if isinstance(res, list) else None

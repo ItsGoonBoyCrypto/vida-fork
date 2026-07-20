@@ -493,8 +493,15 @@ class HoneypotSimulator:
             return "error", None
         if "result" in body:
             return "ok", body["result"]
-        err = (body.get("error") or {}).get("message", "")
-        if "revert" in err.lower() or "execution reverted" in err.lower() or "insufficient" in err.lower():
+        err = (body.get("error") or {}).get("message", "").lower()
+        # A true contract revert = "can't sell". Do NOT treat AMM-side
+        # "INSUFFICIENT_LIQUIDITY / INSUFFICIENT_OUTPUT_AMOUNT" (no/thin pool) as
+        # a revert — that misreads a token with no pool at this router as a
+        # honeypot, which then permanently poisons the deployer/funder blocklist.
+        insufficient_pool = ("insufficient_liquidity" in err
+                             or "insufficient_output" in err
+                             or "insufficient liquidity" in err)
+        if not insufficient_pool and ("revert" in err or "execution reverted" in err):
             return "revert", err
         return "error", None
 

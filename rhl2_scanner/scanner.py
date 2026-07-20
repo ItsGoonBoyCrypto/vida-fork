@@ -661,35 +661,42 @@ class Scanner:
         base = base + "/v2" if base.endswith("/api") else base
         if not base or self._session is None or not address:
             return ""
-        try:
-            async with self._session.get(
-                    f"{base}/addresses/{address}/transactions",
-                    params={"filter": "to"}) as r:
-                data = await r.json() if r.status == 200 else None
-        except Exception:  # noqa: BLE001
-            return ""
-        items = (data or {}).get("items") if isinstance(data, dict) else None
-        if not items:
-            return ""
-        # Earliest inbound tx that actually moved value = the funding transfer.
+        # Blockscout returns inbound txs newest-first and paginates via a cursor.
+        # The funder is the EARLIEST inbound value tx, so page toward the tail
+        # (a fresh scam deployer has few pages; the cap bounds an old wallet).
         best_block, funder = None, ""
-        for tx in items:
+        params: dict = {"filter": "to"}
+        for _ in range(5):
             try:
-                if int(tx.get("value") or 0) <= 0:
+                async with self._session.get(
+                        f"{base}/addresses/{address}/transactions", params=params) as r:
+                    data = await r.json() if r.status == 200 else None
+            except Exception:  # noqa: BLE001
+                break
+            items = (data or {}).get("items") if isinstance(data, dict) else None
+            if not items:
+                break
+            for tx in items:
+                try:
+                    if int(tx.get("value") or 0) <= 0:
+                        continue
+                except (TypeError, ValueError):
                     continue
-            except (TypeError, ValueError):
-                continue
-            frm = ((tx.get("from") or {}).get("hash") or "").lower()
-            to = ((tx.get("to") or {}).get("hash") or "").lower()
-            if to != address.lower() or not frm or frm == address.lower():
-                continue
-            blk = tx.get("block_number") or tx.get("block")
-            try:
-                blk = int(blk)
-            except (TypeError, ValueError):
-                continue
-            if best_block is None or blk < best_block:
-                best_block, funder = blk, frm
+                frm = ((tx.get("from") or {}).get("hash") or "").lower()
+                to = ((tx.get("to") or {}).get("hash") or "").lower()
+                if to != address.lower() or not frm or frm == address.lower():
+                    continue
+                blk = tx.get("block_number") or tx.get("block")
+                try:
+                    blk = int(blk)
+                except (TypeError, ValueError):
+                    continue
+                if best_block is None or blk < best_block:
+                    best_block, funder = blk, frm
+            nxt = (data or {}).get("next_page_params")
+            if not nxt:
+                break
+            params = {"filter": "to", **nxt}
         return funder
 
     async def _trace_scam_funder(self, deployer: str, token: str) -> int:
@@ -2423,6 +2430,17 @@ class Scanner:
         dex = DexScreenerClient(self.cfg, session=self._session)
         if self._listener is None:
             self._listener = PoolListener(self.cfg, session=self._session)
+            # Resume from the persisted checkpoint so a restart doesn't skip the
+            # blocks created while we were down (or re-scan a huge lookback).
+            try:
+                saved = self.storage.kv_get("pool_last_block")
+                self._listener.set_checkpoint(
+                    int(saved) if saved is not None else None,
+                    on_advance=lambda b: self.storage.kv_set("pool_last_block", str(b)))
+                if saved is not None:
+                    log.info("pool listener resuming from block %s", saved)
+            except Exception:  # noqa: BLE001
+                log.debug("pool checkpoint restore failed", exc_info=True)
         if self._curve_listener is None:
             self._curve_listener = LaunchpadCurveListener(self.cfg, session=self._session)
 
@@ -2539,6 +2557,15 @@ class Scanner:
 
         tasks = [self._process(snap) for snap in candidates]
         results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Log per-token exceptions instead of silently dropping them — a class of
+        # tokens that always throws in enrichment/formatting would otherwise
+        # vanish with no trace (exactly how the _to_int NameError hid for so long).
+        for i, r in enumerate(results):
+            if isinstance(r, BaseException):
+                ca = getattr(candidates[i], "token_address", "?")
+                log.error("process failed for %s: %r", ca, r,
+                          exc_info=isinstance(r, Exception))
 
         # Visibility: why did candidates NOT alert this cycle? Aggregate the
         # gate-failure reasons + low-score count, and show the BEST candidate's
