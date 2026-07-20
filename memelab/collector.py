@@ -38,6 +38,9 @@ class CollectorConfig:
     hot_interval_min: float = 3.0      # …every 3 min while hot
     warm_interval_min: float = 30.0    # …every 30 min after, out to track_hours
     track_hours: float = 72.0          # stop snapshotting a token after this
+    # Skip discoveries older than this (the feed re-lists promoted tokens with
+    # no age filter; anchoring a mature token teaches "pumps after promotion").
+    max_discovery_age_min: float = 240.0
     relabel_interval_min: float = 60.0
     win_multiple: float = 3.0
     # Alerting + autonomous backtest
@@ -109,6 +112,16 @@ class Collector:
             fresh += await adapter.discover()
         fresh += await self.feed.new_pairs(chain)
         for snap in fresh:
+            # Only ANCHOR genuinely new tokens. Re-recording a token the
+            # discovery feed keeps re-listing (promoted/boosted for many cycles)
+            # re-snapshots it every pass — bloat + 429s — and lets mature,
+            # already-pumped tokens keep entering; the cadence loop owns
+            # re-snapshots. Also skip clearly-mature discoveries so the signature
+            # doesn't learn "what pumps after being promoted".
+            if self.store.token_known(chain, snap.token_address):
+                continue
+            if snap.age_minutes is not None and snap.age_minutes > self.cfg.max_discovery_age_min:
+                continue
             snap.ts = snap.ts or time.time()
             self.store.record_snapshot(snap)   # entry anchor
 
@@ -119,8 +132,12 @@ class Collector:
             snap = await self.feed.market_for(chain, row["token_address"])
             if snap is None:
                 continue                       # not indexed yet (still on curve) — skip
-            # periodically refresh safety + smart-money (warm cadence, not every tick)
-            if self._due(row, safety=True):
+            # Refresh safety + smart-money on AGE milestones (5/15/30 min), not the
+            # warm cadence. The warm interval since the last snapshot is ~never met
+            # in the hot window (we snapshot every few min), so enrichment used to
+            # land ~90 min in — past the 30-min feature window — leaving
+            # smart_money_count structurally 0 in every training vector.
+            if self._safety_due(chain, row):
                 if adapter is not None:
                     try:
                         await adapter.enrich_safety(snap)
@@ -144,6 +161,10 @@ class Collector:
             self.store.record_snapshot(snap)
             await self._maybe_alert(chain, row["token_address"])
 
+    # Token ages (minutes) at which safety + smart-money enrichment runs once —
+    # chosen to land inside the early feature window so the signals can be learned.
+    _ENRICH_AGES = (5, 15, 30, 60)
+
     def _due(self, row, safety: bool = False) -> bool:
         """Cadence gate: dense while hot, sparse while warm; safety even sparser."""
         now = time.time()
@@ -154,6 +175,19 @@ class Collector:
         interval = (self.cfg.hot_interval_min if age_min <= self.cfg.hot_window_min
                     else self.cfg.warm_interval_min)
         return since_min >= interval
+
+    def _safety_due(self, chain: Chain, row) -> bool:
+        """True once per age milestone the token has passed (5/15/30/60 min), so
+        enrichment runs inside the feature window regardless of snapshot cadence.
+        Also keeps the warm-cadence top-up so long-lived tokens stay refreshed."""
+        age_min = (time.time() - row["first_seen_ts"]) / 60.0
+        token = row["token_address"]
+        for milestone in self._ENRICH_AGES:
+            if age_min >= milestone and self.store.marker_new(
+                    f"enrich|{chain.value}|{token}|{milestone}"):
+                return True
+        # Beyond the milestones, fall back to the warm cadence for periodic refresh.
+        return age_min > self._ENRICH_AGES[-1] and self._due(row, safety=True)
 
     async def _maybe_alert(self, chain: Chain, token_address: str) -> None:
         """Screen the token; alert once if it scores high. A proven core-alpha

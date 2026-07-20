@@ -238,6 +238,14 @@ class Store:
              _snap_to_json(snap)))
         self._conn.commit()
 
+    def token_known(self, chain: Chain, token_address: str) -> bool:
+        """True if we've already recorded this token (so discovery shouldn't
+        re-snapshot it — the cadence loop owns re-snapshots)."""
+        row = self._conn.execute(
+            "SELECT 1 FROM tokens WHERE chain = ? AND token_address = ?",
+            (chain.value, token_address.lower())).fetchone()
+        return row is not None
+
     def pair_address(self, chain: Chain, token_address: str) -> str:
         """The token's recorded AMM pair ('' if unknown) — used to exclude the
         pool from buyer sets (selling sends tokens *to* the pair)."""
