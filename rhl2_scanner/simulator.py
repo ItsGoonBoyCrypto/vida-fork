@@ -68,6 +68,7 @@ class HoneypotSimulator:
         self._session = session
         self._owns_session = session is None
         self._rpc_id = 0
+        self._slot_cache: dict[tuple, Optional[int]] = {}
 
     async def __aenter__(self) -> "HoneypotSimulator":
         if self._session is None:
@@ -243,15 +244,13 @@ class HoneypotSimulator:
             ] = "0x" + _w(_BIG)
 
         if chain.dex_router_kind == "univ3":
-            # V3: try each configured fee tier. A successful sell = sellable.
-            # All tiers reverting is ambiguous (could just be the wrong tier),
-            # so fall back to the router-free transfer check rather than crying
-            # honeypot on a legit token.
-            sold = await self._v3_sell_ok(token, weth, router, amount_in, overrides)
-            if sold is True:
-                report.is_honeypot = False
-            else:
-                report.is_honeypot = await self._transfer_restricted(token, bal_slot)
+            # V3: a non-reverting sell is NOT proof of sellability — a honeypot
+            # (near-100% sell tax, or proceeds siphoned by a transfer hook) lets
+            # the swap execute with amountOutMinimum=0 and returns dust. So we
+            # measure a value-matched round-trip (buy WETH->token, then sell the
+            # tokens back) and only credit "sellable" when real proceeds come
+            # back. Unmeasurable => None (unconfirmed), never a false "Sellable".
+            report.is_honeypot = await self._v3_roundtrip(token, weth, router, bal_slot)
             return
 
         # V2: single pool per pair, so a revert is a meaningful "can't sell".
@@ -273,43 +272,101 @@ class HoneypotSimulator:
             report.is_honeypot = True
         # status "error" (rpc/no-node) -> leave None (unconfirmed)
 
-    async def _v3_sell_ok(self, token: str, weth: str, router: str,
-                          amount_in: int, overrides: dict) -> Optional[bool]:
-        """Simulate SwapRouter02.exactInputSingle(token->WETH) per fee tier.
+    async def _v3_out(self, router: str, token_in: str, token_out: str, fee: int,
+                      amount_in: int, overrides: dict) -> tuple[str, Optional[int]]:
+        """One V3 exactInputSingle leg. Returns (status, amountOut).
 
-        Returns True if any tier's sell succeeds (token is sellable). Returns
-        None if every tier reverts/errors (ambiguous: wrong tier or no pool) —
-        never False, to avoid false honeypot calls on V3.
+        exactInputSingle returns the realised output amount, so we can measure
+        how much actually came back (not just that the call didn't revert).
         """
-        for fee in self.cfg.chain.dex_v3_fee_tiers:
-            # exactInputSingle((tokenIn, tokenOut, fee, recipient, amountIn,
-            #                    amountOutMinimum, sqrtPriceLimitX96))
-            # All members static -> the struct is encoded inline as 7 words.
-            data = (
-                "0x" + _SEL_V3_EXACT_IN_SINGLE
-                + _addr(token)         # tokenIn
-                + _addr(weth)          # tokenOut
-                + _w(int(fee))         # fee tier
-                + _addr(BURNER)        # recipient
-                + _w(amount_in)        # amountIn
-                + _w(0)                # amountOutMinimum
-                + _w(0)                # sqrtPriceLimitX96 (0 = no limit)
-            )
-            status, _ = await self._call_status(router, data, overrides, frm=BURNER)
-            if status == "ok":
-                return True
-        return None
+        data = (
+            "0x" + _SEL_V3_EXACT_IN_SINGLE
+            + _addr(token_in)      # tokenIn
+            + _addr(token_out)     # tokenOut
+            + _w(int(fee))         # fee tier
+            + _addr(BURNER)        # recipient
+            + _w(amount_in)        # amountIn
+            + _w(0)                # amountOutMinimum (0 -> we judge the output ourselves)
+            + _w(0)                # sqrtPriceLimitX96 (0 = no limit)
+        )
+        status, result = await self._call_status(router, data, overrides, frm=BURNER)
+        if status != "ok" or not result:
+            return status, None
+        words = _decode_words(result, 1)
+        return status, (words[0] if words else None)
+
+    async def _v3_roundtrip(self, token: str, weth: str, router: str,
+                            token_bal_slot: int) -> Optional[bool]:
+        """Value-matched round-trip honeypot check via eth_call + stateOverride.
+
+        For each fee tier: buy (WETH->token) with an injected WETH balance, then
+        sell those tokens back (token->WETH). Verdict:
+          * buy works but sell reverts / returns 0  -> honeypot (True)
+          * round-trip loses more than the sell-tax cap -> honeypot (True)
+          * round-trip recovers most of the value     -> sellable  (False)
+          * no tradeable pool / can't fund the probe  -> unconfirmed (None)
+        Never asserts "sellable" without measured proceeds.
+        """
+        chain = self.cfg.chain
+        probe = int(chain.honeypot_sim_amount_wei)          # WETH spent on the test buy
+        max_loss_bps = int(round(self.cfg.runtime.honeypot_sell_tax_pct * 100))  # 50% -> 5000
+
+        weth_bal_slot = await self._cached_slot(weth, "bal")
+        if weth_bal_slot is None:
+            return None                                     # can't fund a buy -> unconfirmed
+        weth_allow_slot = await self._cached_slot(weth, "allow", router)
+        token_allow_slot = await self._find_allowance_slot(token, router)
+
+        weth_ov = self._bal_allow_override(weth, weth_bal_slot, weth_allow_slot, router)
+        token_ov = self._bal_allow_override(token, token_bal_slot, token_allow_slot, router)
+
+        saw_pool = False
+        for fee in chain.dex_v3_fee_tiers:
+            st_buy, tok_out = await self._v3_out(router, weth, token, int(fee), probe, weth_ov)
+            if st_buy != "ok" or not tok_out:
+                continue                                    # no pool at this tier
+            saw_pool = True
+            st_sell, eth_back = await self._v3_out(router, token, weth, int(fee), tok_out, token_ov)
+            if st_sell == "revert" or not eth_back:
+                return True                                 # bought fine, can't cash out -> honeypot
+            loss_bps = int((1.0 - (eth_back / probe)) * 10000) if probe else 0
+            if loss_bps >= max_loss_bps:
+                return True                                 # punitive round-trip -> effective honeypot
+            return False                                    # measured, real proceeds -> sellable
+        return None if not saw_pool else False
+
+    def _bal_allow_override(self, token: str, bal_slot: int,
+                            allow_slot: Optional[int], spender: str) -> dict:
+        diff = {mapping_slot(BURNER, bal_slot): "0x" + _w(_BIG)}
+        if allow_slot is not None:
+            diff[nested_mapping_slot(BURNER, spender, allow_slot)] = "0x" + _w(_BIG)
+        return {token.lower(): {"stateDiff": diff}}
+
+    async def _cached_slot(self, token: str, kind: str,
+                           spender: Optional[str] = None) -> Optional[int]:
+        key = (token.lower(), kind, (spender or "").lower())
+        if key in self._slot_cache:
+            return self._slot_cache[key]
+        if kind == "bal":
+            slot = await self._find_balance_slot(token)
+        else:
+            slot = await self._find_allowance_slot(token, spender or "")
+        self._slot_cache[key] = slot
+        return slot
 
     async def _transfer_restricted(self, token: str, bal_slot: int) -> Optional[bool]:
-        """Fallback: simulate a plain transfer; revert => restricted/honeypot-ish."""
+        """Simulate a plain transfer; revert => restricted/honeypot-ish.
+
+        Safety-first: a *working* plain transfer is NOT proof you can sell into
+        the pool (most honeypots allow wallet-to-wallet transfers and only block
+        sells), so this only ever escalates to True — it never asserts sellable.
+        """
         overrides = {
             token.lower(): {"stateDiff": {mapping_slot(BURNER, bal_slot): "0x" + _w(_BIG)}}
         }
         # transfer(0x...dead, 1)
         data = "0xa9059cbb" + _addr("0x000000000000000000000000000000000000dEaD") + _w(1)
         status, _ = await self._call_status(token, data, overrides, frm=BURNER)
-        if status == "ok":
-            return False
         if status == "revert":
             return True
         return None

@@ -34,6 +34,10 @@ class FakeResp:
         return self._payload
 
 
+class _Revert:
+    """Sentinel a handler can return to make a JSON-RPC call read as reverted."""
+
+
 class FakeSession:
     """Minimal aiohttp-like session: routes eth_call/getBlock by a handler."""
 
@@ -44,6 +48,9 @@ class FakeSession:
     def post(self, url, json=None):
         self.calls.append(json)
         result = self.handler(json)
+        if isinstance(result, _Revert):
+            return FakeResp({"jsonrpc": "2.0", "id": json.get("id"),
+                             "error": {"message": "execution reverted"}})
         return FakeResp({"jsonrpc": "2.0", "id": json.get("id"), "result": result})
 
     def get(self, url, params=None):  # unused here
@@ -148,30 +155,56 @@ class TestV3SellSim(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(report.is_honeypot)     # sold>0, round-trip 8% < 50%
         self.assertIsNone(report.sell_tax_pct)   # not isolated on V3
 
-    async def test_v3_sell_success_marks_not_honeypot(self):
-        cfg = self._cfg()
-        calls = {"n": 0}
+    # In V3 calldata the tokenIn address is the last 40 hex chars of the first
+    # word (indices 34:74). weth = 0x2*40, token = 0xa*40 in these tests.
+    @staticmethod
+    def _token_in(data: str) -> str:
+        return data[34:74]
 
+    def _make_handler(self, buy_out: int, sell_out, sell_status: str = "ok"):
+        """FakeSession handler for a V3 round-trip: a buy leg (weth->token) and a
+        sell leg (token->weth). ``sell_out``/``sell_status`` shape the verdict."""
         def handler(payload):
-            m = payload["method"]
-            if m == "eth_call":
-                data = payload["params"][0]["data"]
-                # balance/allowance slot probes return the BIG override; decimals; swap ok
-                if data.startswith("0x70a08231") or data.startswith("0xdd62ed3e"):
-                    return "0x" + f"{10**30:064x}"      # slot found immediately
-                if data.startswith("0x313ce567"):
-                    return "0x" + f"{18:064x}"           # decimals
-                if data.startswith("0x04e45aaf"):
-                    calls["n"] += 1
-                    return "0x" + f"{5:064x}"            # swap returns amountOut -> sellable
+            data = payload["params"][0]["data"]
+            if data.startswith("0x70a08231") or data.startswith("0xdd62ed3e"):
+                return "0x" + f"{10**30:064x}"          # balance/allowance slot found
+            if data.startswith("0x313ce567"):
+                return "0x" + f"{18:064x}"               # decimals
+            if data.startswith("0x04e45aaf"):            # exactInputSingle
+                if self._token_in(data) == "2" * 40:     # buy: weth -> token
+                    return "0x" + f"{buy_out:064x}"
+                # sell: token -> weth
+                if sell_status == "revert":
+                    return _Revert()
+                return "0x" + f"{sell_out:064x}"
             return "0x"
+        return handler
 
+    async def _verdict(self, handler):
         from rhl2_scanner.models import TokenSnapshot
         snap = TokenSnapshot(chain="robinhood", pair_address="0xp", token_address="0x" + "a" * 40)
-        sim = HoneypotSimulator(cfg, session=FakeSession(handler))
-        report = await sim.check(snap)
-        self.assertFalse(report.is_honeypot)   # a V3 sell succeeded
-        self.assertGreaterEqual(calls["n"], 1)
+        sim = HoneypotSimulator(self._cfg(), session=FakeSession(handler))
+        return (await sim.check(snap)).is_honeypot
+
+    async def test_v3_healthy_roundtrip_is_sellable(self):
+        # probe = 1e16 wei; buy yields tokens, selling them back recovers ~97% -> sellable
+        hp = await self._verdict(self._make_handler(buy_out=1_000_000, sell_out=int(0.97 * 10**16)))
+        self.assertFalse(hp)
+
+    async def test_v3_dust_proceeds_is_honeypot(self):
+        # sell leg executes but returns dust (near-100% sell tax) -> honeypot,
+        # even though the swap did not revert. This is the bug the fix closes.
+        hp = await self._verdict(self._make_handler(buy_out=1_000_000, sell_out=5))
+        self.assertTrue(hp)
+
+    async def test_v3_sell_reverts_is_honeypot(self):
+        hp = await self._verdict(self._make_handler(buy_out=1_000_000, sell_out=0, sell_status="revert"))
+        self.assertTrue(hp)
+
+    async def test_v3_no_pool_is_unconfirmed(self):
+        # buy leg returns 0 at every tier -> no tradeable pool -> unconfirmed (None)
+        hp = await self._verdict(self._make_handler(buy_out=0, sell_out=0))
+        self.assertIsNone(hp)
 
 
 class TestLpLock(unittest.IsolatedAsyncioTestCase):
