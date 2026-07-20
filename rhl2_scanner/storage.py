@@ -213,6 +213,18 @@ CREATE TABLE IF NOT EXISTS honeypot_deployers (
     last_token TEXT,
     ts         REAL NOT NULL
 );
+
+-- Toxic funders: the wallet that FUNDED a known scam deployer (its first inbound
+-- native transfer). Scammers cycle throwaway deployer EOAs but reuse one funding
+-- source, so matching a new token's deployer-funder against this set catches the
+-- next launch before it rugs. count = distinct honeypots traced to this funder.
+CREATE TABLE IF NOT EXISTS toxic_funders (
+    funder        TEXT PRIMARY KEY,  -- lowercased funding wallet
+    count         INTEGER DEFAULT 1, -- distinct scam deployers it bankrolled
+    last_deployer TEXT,
+    last_token    TEXT,
+    ts            REAL NOT NULL
+);
 """
 
 
@@ -601,6 +613,44 @@ class Storage:
             "ORDER BY count DESC, ts DESC LIMIT ?", (limit,)).fetchall()
         return [{"deployer": r["deployer"], "count": r["count"],
                  "last_token": r["last_token"]} for r in rows]
+
+    def record_toxic_funder(self, funder: str, deployer: str, token: str) -> int:
+        """Record the wallet that funded a scam deployer. Returns new count."""
+        f = funder.lower()
+        self._conn.execute(
+            "INSERT INTO toxic_funders (funder, count, last_deployer, last_token, ts) "
+            "VALUES (?, 1, ?, ?, ?) ON CONFLICT(funder) DO UPDATE SET "
+            "count = count + 1, last_deployer = excluded.last_deployer, "
+            "last_token = excluded.last_token, ts = excluded.ts",
+            (f, (deployer or "").lower(), (token or "").lower(), time.time()))
+        self._conn.commit()
+        row = self._conn.execute(
+            "SELECT count FROM toxic_funders WHERE funder = ?", (f,)).fetchone()
+        return int(row["count"]) if row else 1
+
+    def is_toxic_funder(self, funder: str) -> int:
+        """How many scam deployers this funder bankrolled (0 = not known)."""
+        if not funder:
+            return 0
+        row = self._conn.execute(
+            "SELECT count FROM toxic_funders WHERE funder = ?",
+            (funder.lower(),)).fetchone()
+        return int(row["count"]) if row else 0
+
+    def forget_toxic_funder(self, funder: str) -> bool:
+        """Remove a funder from the blocklist (e.g. a mislabelled CEX hot wallet)."""
+        cur = self._conn.execute(
+            "DELETE FROM toxic_funders WHERE funder = ?", (funder.lower(),))
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def toxic_funders(self, limit: int = 20) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT funder, count, last_deployer, last_token FROM toxic_funders "
+            "ORDER BY count DESC, ts DESC LIMIT ?", (limit,)).fetchall()
+        return [{"funder": r["funder"], "count": r["count"],
+                 "last_deployer": r["last_deployer"], "last_token": r["last_token"]}
+                for r in rows]
 
     def deployer_reputation(self, deployer: str) -> dict:
         row = self._conn.execute(

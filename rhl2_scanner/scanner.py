@@ -592,6 +592,56 @@ class Scanner:
             return ""
         return (data.get("creator_address_hash") or data.get("creator_address") or "").lower()
 
+    async def _funder_of(self, address: str) -> str:
+        """The wallet that FUNDED an EOA — its earliest inbound native transfer's
+        sender, lowercased. This is the reusable funding source behind a scammer's
+        throwaway deployer wallets. Blockscout v2; "" if not resolvable.
+        """
+        base = (self.cfg.chain.explorer_api_url or "").rstrip("/")
+        base = base + "/v2" if base.endswith("/api") else base
+        if not base or self._session is None or not address:
+            return ""
+        try:
+            async with self._session.get(
+                    f"{base}/addresses/{address}/transactions",
+                    params={"filter": "to"}) as r:
+                data = await r.json() if r.status == 200 else None
+        except Exception:  # noqa: BLE001
+            return ""
+        items = (data or {}).get("items") if isinstance(data, dict) else None
+        if not items:
+            return ""
+        # Earliest inbound tx that actually moved value = the funding transfer.
+        best_block, funder = None, ""
+        for tx in items:
+            try:
+                if int(tx.get("value") or 0) <= 0:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            frm = ((tx.get("from") or {}).get("hash") or "").lower()
+            to = ((tx.get("to") or {}).get("hash") or "").lower()
+            if to != address.lower() or not frm or frm == address.lower():
+                continue
+            blk = tx.get("block_number") or tx.get("block")
+            try:
+                blk = int(blk)
+            except (TypeError, ValueError):
+                continue
+            if best_block is None or blk < best_block:
+                best_block, funder = blk, frm
+        return funder
+
+    async def _trace_scam_funder(self, deployer: str, token: str) -> int:
+        """Resolve a scam deployer's funder and blocklist it. Returns its count
+        (0 if unresolved or excluded as a CEX/bridge/launchpad wallet)."""
+        if not deployer:
+            return 0
+        funder = await self._funder_of(deployer)
+        if not funder or funder in self.cfg.funder_exclusions():
+            return 0
+        return self.storage.record_toxic_funder(funder, deployer, token)
+
     async def _label_deployer(self, token: str, outcome: str) -> None:
         """Record a token's deployer + outcome for per-creator win-rate.
 
@@ -1520,6 +1570,10 @@ class Scanner:
             "buyers into the smart set so future similar setups score higher",
             "<code>/harvestrug 0xCA</code> — log a rug: marks repeat-rugger wallets "
             "toxic so tokens they buy get demoted",
+            "<code>/funder 0xCA</code> — trace a scam token's FUNDING wallet + blocklist it "
+            "(catches the same funder's next launch)",
+            "<code>/funders</code> — list toxic funding wallets · "
+            "<code>/forgetfunder 0xADDR</code> — remove a mislabelled one",
             "<code>/alpha</code> — top wallets by winner-overlap (⭐ = core-alpha)",
             "<code>/deployers</code> — deployer win-rates (direct-deploy tokens)",
             "<code>/honeypots</code> — known honeypot deployers (serial-scammer blocklist)",
@@ -1757,6 +1811,47 @@ class Scanner:
                     await self._send_html(await self._harvest_rug(ca))
                 except Exception as exc:  # noqa: BLE001
                     await self._send_html("rug log failed: " + __import__("html").escape(str(exc)))
+        elif cmd in ("funder", "harvestfunder", "scamfunder"):
+            cas = [p.lower() for p in parts[1:]
+                   if p.lower().startswith("0x") and len(p) == 42]
+            if not cas:
+                await self._send_html(
+                    "Usage: <code>/funder 0xCA</code>\n"
+                    "Trace a scam token's <b>funding wallet</b> (the deployer's "
+                    "first funder) and blocklist it, so the same funder's next "
+                    "launch is caught before it rugs.")
+                return
+            for ca in cas[:5]:
+                try:
+                    await self._send_html(await self._seed_scam_funder(ca))
+                except Exception as exc:  # noqa: BLE001
+                    await self._send_html("funder trace failed: " + __import__("html").escape(str(exc)))
+        elif cmd in ("funders", "scamfunders"):
+            rows = self.storage.toxic_funders(limit=20)
+            if not rows:
+                await self._send_html(
+                    "No toxic funders recorded yet — they're captured automatically "
+                    "when a honeypot is confirmed, or via <code>/funder 0xCA</code>.")
+                return
+            from html import escape as _esc
+            lines = ["🎯 <b>Toxic funding wallets</b> (scam bankrollers)"]
+            for r in rows:
+                lines.append(f"<code>{_esc(r['funder'])}</code> — {r['count']} scam(s)")
+            lines.append("")
+            lines.append("Remove a mislabelled one: <code>/forgetfunder 0xADDR</code>")
+            await self._send_html("\n".join(lines))
+        elif cmd in ("forgetfunder", "unfunder"):
+            addrs = [p.lower() for p in parts[1:]
+                     if p.lower().startswith("0x") and len(p) == 42]
+            if not addrs:
+                await self._send_html("Usage: <code>/forgetfunder 0xADDR</code>")
+                return
+            from html import escape as _esc
+            for a in addrs:
+                ok = self.storage.forget_toxic_funder(a)
+                await self._send_html(
+                    (f"✅ Removed <code>{_esc(a)}</code> from the toxic-funder set."
+                     if ok else f"<code>{_esc(a)}</code> wasn't in the set."))
         elif cmd in ("alpha", "alphas", "reputation", "rep"):
             top = self.storage.top_reputation_wallets(limit=15)
             if not top:
@@ -2497,6 +2592,18 @@ class Scanner:
                     snap.dev_note = f"⚠️ dev rugged {rep['rugs']}× before"
                 elif rep["wins"]:
                     snap.dev_note = f"🔥 dev launched {rep['wins']} prior winner(s)"
+
+                # Funding-wallet check: is this deployer bankrolled by a wallet
+                # that funded prior scams? Warns on a single hit; vetoes the alert
+                # once the funder has funded funder_gate_min_hits+ honeypots.
+                if self.cfg.runtime.honeypot_trace_funder and not hp:
+                    funder = await self._funder_of(creator)
+                    hits = self.storage.is_toxic_funder(funder) if funder else 0
+                    if hits:
+                        snap.dev_note = (f"⚠️ deployer funded by a wallet tied to "
+                                         f"{hits} prior scam(s)")
+                        if hits >= self.cfg.runtime.funder_gate_min_hits:
+                            snap.funder_blocked = True
         except Exception:  # noqa: BLE001
             log.debug("dev-note resolution failed", exc_info=True)
 
@@ -2539,6 +2646,16 @@ class Scanner:
 
         if is_hp and deployer:
             dep_hits = self.storage.record_honeypot_deployer(deployer, snap.token_address)
+            # Trace + blocklist the deployer's funding wallet, so the SAME funder's
+            # next throwaway deployer is caught before it rugs.
+            if rc.honeypot_trace_funder:
+                try:
+                    fh = await self._trace_scam_funder(deployer, snap.token_address)
+                    if fh:
+                        log.info("TOXIC FUNDER recorded for %s (funder hits=%d)",
+                                 snap.token_address, fh)
+                except Exception:  # noqa: BLE001
+                    log.debug("funder trace failed", exc_info=True)
 
         if s.is_honeypot is True:
             reason = "Can't-sell honeypot confirmed (sell simulation failed)."
@@ -2636,6 +2753,12 @@ class Scanner:
         # Fuse EVERY signal into this one alert (conviction, exit plan, KOL,
         # contract audit) — attached to the snapshot for the formatter.
         await self._attach_alert_intel(snap, result)
+
+        # Repeat scam-funder veto: the deployer was bankrolled by a wallet tied to
+        # multiple prior honeypots — suppress rather than alert.
+        if snap.funder_blocked:
+            log.info("skip %s — deployer funded by a repeat scam funder", snap.symbol)
+            return result
 
         # Early-launch conviction floor (composite can't gate fresh tokens fairly).
         if tier == 0 and (snap.conviction or 0.0) < rc.early_launch_min_conviction:
@@ -2866,6 +2989,47 @@ class Scanner:
             "toward toxicity.",
             f"A wallet in ≥{rc.toxic_min_rugs} rugs (net-negative vs winners) is "
             f"toxic → its buys get demoted. <b>{toxic_now}</b> wallet(s) toxic so far.",
+        ])
+
+    async def _seed_scam_funder(self, ca: str) -> str:
+        """Manually trace + blocklist a scam token's funding wallet.
+
+        Resolves the token's deployer, then the deployer's funder (its first
+        inbound native transfer), and records that funder as toxic — so the same
+        wallet's next launch is caught. Also flags the deployer as a honeypot dev.
+        """
+        from html import escape as _esc
+        ca = ca.lower()
+        creator = await self._creator_of(ca)
+        if not creator:
+            return f"couldn't resolve a deployer for <code>{_esc(ca)}</code> (explorer had no creator)."
+        if creator in self.cfg.known_launchpad_addresses():
+            return (f"<code>{_esc(ca)}</code> was deployed by a shared launchpad "
+                    "manager — its funder is the launchpad, not a scammer. Skipped.")
+        # Record the deployer on the honeypot blocklist too (belt and braces).
+        self.storage.record_honeypot_deployer(creator, ca)
+        funder = await self._funder_of(creator)
+        if not funder:
+            return "\n".join([
+                f"⚠️ Flagged deployer <code>{_esc(creator)}</code> as a scammer, but "
+                "couldn't resolve its funding wallet (no inbound value tx on the "
+                "explorer's first page).",
+            ])
+        if funder in self.cfg.funder_exclusions():
+            return "\n".join([
+                f"Deployer <code>{_esc(creator)}</code> was funded by "
+                f"<code>{_esc(funder)}</code>, which is on the CEX/bridge "
+                "exclusion list — not blocklisting (too high fan-out).",
+            ])
+        hits = self.storage.record_toxic_funder(funder, creator, ca)
+        return "\n".join([
+            f"🎯 <b>Scam funder recorded</b>",
+            f"token: <code>{_esc(ca)}</code>",
+            f"deployer: <code>{_esc(creator)}</code>",
+            f"funder: <code>{_esc(funder)}</code> — now tied to <b>{hits}</b> scam(s)",
+            "",
+            f"Future tokens whose deployer this wallet funds will be flagged, and "
+            f"vetoed outright at ≥{self.cfg.runtime.funder_gate_min_hits} hits.",
         ])
 
     async def _harvest_winners(self, dex) -> None:

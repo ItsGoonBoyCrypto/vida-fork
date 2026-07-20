@@ -104,6 +104,11 @@ class ChainConfig:
     honeypot_simulator_address: str = "0x00000000000000000000000000000000515a1000"
     honeypot_sim_amount_wei: int = 10 ** 16            # 0.01 native token test buy
 
+    # High-fan-out funding wallets (CEX hot wallets, bridges) that legitimately
+    # fund thousands of deployers — never blocklist these as "toxic funders",
+    # or one bad token they touched would flag every legit token they funded.
+    funder_exclude_addresses: list[str] = field(default_factory=list)
+
     # --- LP lock detection ---
     # Simple form: addresses that, if they hold the LP, count the LP as locked.
     lp_locker_addresses: list[str] = field(default_factory=list)
@@ -404,6 +409,14 @@ class RuntimeConfig:
     honeypot_alert_enabled: bool = True
     honeypot_sell_tax_pct: float = 50.0    # sell tax at/above this = effective trap
     honeypot_probe_deployer: bool = True   # resolve+check the deployer (1 explorer call)
+    # Funder tracing: a scammer cycles throwaway deployer EOAs but funds them from
+    # one wallet. When a honeypot is confirmed, trace its deployer's funder (first
+    # inbound native tx) and blocklist it, so the SAME funder's next launch is
+    # caught. A single hit only warns (a CEX hot wallet can fund one bad token);
+    # funder_gate_min_hits repeat hits suppress the alert outright. Exclude known
+    # CEX/bridge hot wallets (high fan-out) to avoid false positives.
+    honeypot_trace_funder: bool = True
+    funder_gate_min_hits: int = 2          # >= this many honeypots traced -> gate
 
     # --- Early-launch alerts (catch runners pre/just-after graduation) ---
     # Fresh tokens have few holders + concentrated supply + little volume, so
@@ -560,6 +573,16 @@ class Config:
         for lp in self.configured_launchpads():
             out[str(lp["manager"]).lower()] = lp.get("name", "launchpad")
         return out
+
+    def funder_exclusions(self) -> set[str]:
+        """Lowercased CEX/bridge hot wallets never treated as toxic funders.
+
+        Known launchpad managers are auto-excluded too — on a bonding-curve
+        launchpad the deployer's 'funder' is often the shared manager contract.
+        """
+        excl = {str(a).lower() for a in (self.chain.funder_exclude_addresses or [])}
+        excl.update(self.known_launchpad_addresses().keys())
+        return excl
 
     # -- Loading ---------------------------------------------------------
 

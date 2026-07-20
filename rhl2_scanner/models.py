@@ -132,6 +132,7 @@ class TokenSnapshot:
     exit_target: str = ""           # learned take-profit hint, e.g. "~4x–7x"
     kol_labels: list = field(default_factory=list)           # KOL names among buyers
     dev_note: str = ""              # deployer track record (prior winners/rugs/honeypots)
+    funder_blocked: bool = False    # deployer funded by a repeat scam funder -> veto alert
     launchpad: str = ""             # origin launchpad name if known (e.g. "flap")
     curve_progress_pct: Optional[float] = None   # bonding-curve fill % (pre-graduation)
 
