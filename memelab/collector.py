@@ -55,6 +55,7 @@ class CollectorConfig:
     heartbeat_interval_min: float = 720.0   # 12h "alive + stats" digest
     backup_interval_min: float = 1440.0     # daily dataset backup
     backup_keep: int = 7
+    snapshot_retention_days: float = 30.0   # drop raw snapshot series older than this
 
 
 class Collector:
@@ -306,6 +307,14 @@ class Collector:
         import glob
         import os
         try:
+            # Prune the unbounded snapshot series for long-settled tokens first
+            # so the DB and its backups stay bounded on a multi-month run.
+            try:
+                pruned = self.store.prune(days=self.cfg.snapshot_retention_days)
+                if pruned:
+                    log.info("pruned %d stale snapshot rows", pruned)
+            except Exception:
+                log.debug("prune failed", exc_info=True)
             dest = f"{path}.bak.{int(now)}"
             self.store.backup(dest)
             backups = sorted(glob.glob(f"{path}.bak.*"))

@@ -288,16 +288,40 @@ class Store:
             outcome=Outcome(trow["outcome"] or "pending"))
 
     def labeled_tokens(self, chain: Optional[Chain] = None,
-                       min_age_hours: float = 48.0) -> list[TokenTimeSeries]:
-        """Tokens old enough to have a settled outcome — the training set."""
-        cutoff = time.time() - min_age_hours * 3600.0
-        q = "SELECT chain, token_address FROM tokens WHERE first_seen_ts <= ?"
-        args: list = [cutoff]
+                       min_age_hours: float = 48.0,
+                       max_age_days: float = 30.0) -> list[TokenTimeSeries]:
+        """Tokens old enough to have a settled outcome — the training set.
+
+        Bounded ABOVE too: past ``max_age_days`` the raw snapshot series is
+        pruned (see ``prune``), so a token that old would train with no features.
+        The bound also caps the per-backtest scan from growing without limit.
+        """
+        now = time.time()
+        lo = now - min_age_hours * 3600.0
+        hi = now - max_age_days * 86400.0
+        q = "SELECT chain, token_address FROM tokens WHERE first_seen_ts <= ? AND first_seen_ts >= ?"
+        args: list = [lo, hi]
         if chain:
             q += " AND chain = ?"
             args.append(chain.value)
         rows = self._conn.execute(q, args).fetchall()
         return [self.time_series(Chain(r["chain"]), r["token_address"]) for r in rows]
+
+    def prune(self, days: float = 30.0) -> int:
+        """Drop the raw snapshot series for tokens older than ``days`` (their
+        settled outcome — entry/peak/trough — stays on the tokens row). Bounds
+        the unbounded snapshots table; keeps ml_markers/reputation intact."""
+        cutoff = time.time() - days * 86400.0
+        old = self._conn.execute(
+            "SELECT chain, token_address FROM tokens WHERE first_seen_ts < ?",
+            (cutoff,)).fetchall()
+        n = 0
+        for r in old:
+            n += self._conn.execute(
+                "DELETE FROM snapshots WHERE chain = ? AND token_address = ?",
+                (r["chain"], r["token_address"])).rowcount
+        self._conn.commit()
+        return n
 
     def winner_tokens(self) -> list:
         """(Chain, token) for every token currently labeled WINNER."""

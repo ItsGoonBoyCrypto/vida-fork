@@ -474,6 +474,7 @@ class RuntimeConfig:
     db_backup_enabled: bool = True
     db_backup_keep: int = 7
     db_backup_ship_days: float = 7.0
+    db_prune_days: int = 30            # forget stale dedup/observation rows older than this
     paper_digest_win_multiple: float = 2.0
     # --- Bounded auto-tune of scoring weights ---
     # Once enough alerts have settled, nudge the category weights toward the

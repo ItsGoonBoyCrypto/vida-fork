@@ -252,6 +252,14 @@ class Scanner:
         day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
         dest = f"{self.storage.path}.bak.{day}"
         try:
+            # Prune stale dedup/observation rows (never reputation/blocklists)
+            # before the backup so the DB — and the copy — stay small.
+            try:
+                pruned = self.storage.prune(days=rc.db_prune_days)
+                if pruned:
+                    log.info("pruned %d stale rows from scanner.db", pruned)
+            except Exception:  # noqa: BLE001
+                log.debug("prune failed", exc_info=True)
             self.storage.backup(dest)
             self.storage.kv_set("last_db_backup_ts", str(now))
             # Rotate: keep the newest N.

@@ -661,6 +661,25 @@ class Storage:
         finally:
             dst.close()
 
+    def prune(self, days: int = 30) -> int:
+        """Delete stale rows from unbounded pure-dedup/observation tables so the
+        DB doesn't grow forever on a long run. Only touches tables that are safe
+        to forget — NOT reputation/blocklist/alert history. Returns rows removed.
+        """
+        cutoff = time.time() - days * 86400
+        removed = 0
+        for sql, args in (
+            ("DELETE FROM pos_events WHERE ts < ?", (cutoff,)),
+            ("DELETE FROM curve_observations WHERE ts < ?", (cutoff,)),
+            ("DELETE FROM harvest_candidates WHERE done = 1 AND entry_ts < ?", (cutoff,)),
+        ):
+            try:
+                removed += self._conn.execute(sql, args).rowcount
+            except sqlite3.Error:
+                pass
+        self._conn.commit()
+        return removed
+
     def record_toxic_funder(self, funder: str, deployer: str, token: str) -> int:
         """Record the wallet that funded a scam deployer. Returns new count."""
         f = funder.lower()

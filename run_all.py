@@ -61,17 +61,53 @@ async def _run_dashboard() -> None:
     await server.serve()
 
 
+async def _alert_ops(text: str) -> None:
+    """Best-effort Telegram ping to the operator (crash-loop alarm)."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat = os.environ.get("TELEGRAM_ALERT_CHAT_ID", "")
+    if not token or not chat:
+        return
+    try:
+        from rhl2_scanner.tgtools import send_message
+        await send_message(token, chat, text)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def _supervise(name: str, factory) -> None:
-    """Run a part forever; restart it on crash so one failure isn't fatal."""
+    """Run a part forever; restart on crash. Escalating backoff + a crash-loop
+    alarm so a part that dies on startup doesn't loop silently (you'd otherwise
+    only notice via the absence of alerts)."""
+    fails = 0           # consecutive fast failures
+    alarmed = False
     while True:
+        started = None
         try:
+            import time
+            started = time.monotonic()
             await factory()
-            log.warning("%s exited cleanly — restarting in 10s", name)
+            log.warning("%s exited cleanly — restarting", name)
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception("%s crashed — restarting in 10s", name)
-        await asyncio.sleep(10)
+            log.exception("%s crashed", name)
+        # A run that lasted a while = healthy; reset the counter. A run that died
+        # fast = crash-looping; back off (10s → 20 → 40 … capped 5 min) and,
+        # once, tell the operator.
+        import time
+        ran_for = (time.monotonic() - started) if started else 0.0
+        if ran_for > 120:
+            fails, alarmed = 0, False
+        else:
+            fails += 1
+        delay = min(300, 10 * (2 ** min(fails, 5)))
+        if fails >= 3 and not alarmed:
+            alarmed = True
+            await _alert_ops(f"⚠️ <b>{name}</b> is crash-looping ({fails} fast "
+                             f"failures) — check the logs. Retrying every ~{delay}s.")
+        log.warning("%s restarting in %ds (consecutive fast failures: %d)",
+                    name, delay, fails)
+        await asyncio.sleep(delay)
 
 
 async def main() -> None:
