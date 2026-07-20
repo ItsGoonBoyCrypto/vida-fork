@@ -380,7 +380,6 @@ class EvmChainClient:
                 return await resp.json()
         except (aiohttp.ClientError, TimeoutError, ValueError):
             return None
-        return snap
 
     # New-pool discovery is implemented in ``sources.poollistener.PoolListener``
     # (real eth_getLogs polling of the DEX factory PairCreated/PoolCreated event).
@@ -389,6 +388,13 @@ class EvmChainClient:
 def _to_float(x: Any) -> Optional[float]:
     try:
         return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_int(x: Any) -> Optional[int]:
+    try:
+        return int(float(x))
     except (TypeError, ValueError):
         return None
 
