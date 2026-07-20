@@ -206,6 +206,49 @@ class TestV3SellSim(unittest.IsolatedAsyncioTestCase):
         hp = await self._verdict(self._make_handler(buy_out=0, sell_out=0))
         self.assertIsNone(hp)
 
+    @staticmethod
+    def _amount_in(data: str) -> int:
+        # exactInputSingle amountIn is the 5th 32-byte word after the selector.
+        start = 10 + 4 * 64
+        return int(data[start:start + 64], 16)
+
+    async def _report(self, handler, top_holders=None):
+        from rhl2_scanner.models import TokenSnapshot
+        snap = TokenSnapshot(chain="robinhood", pair_address="0xp",
+                             token_address="0x" + "a" * 40,
+                             top_holders=top_holders or [])
+        sim = HoneypotSimulator(self._cfg(), session=FakeSession(handler))
+        return await sim.check(snap)
+
+    async def test_v3_max_sell_trap_flagged(self):
+        # small round-trip clears, but a 25x-size sell reverts -> max-sell caution
+        base = self._make_handler(buy_out=1_000_000, sell_out=int(0.97 * 10**16))
+
+        def handler(payload):
+            data = payload["params"][0]["data"]
+            if (data.startswith("0x04e45aaf") and self._token_in(data) == "a" * 40
+                    and self._amount_in(data) > 5_000_000):     # a large sell
+                return _Revert()
+            return base(payload)
+        rep = await self._report(handler)
+        self.assertFalse(rep.is_honeypot)                       # small sell works
+        self.assertTrue(any("max-sell" in f for f in rep.high_risk_flags), rep.high_risk_flags)
+
+    async def test_v3_selective_blacklist_is_honeypot(self):
+        # the fresh burner sells fine, but real top holders can't -> honeypot
+        holder = "0x" + "7" * 40
+        base = self._make_handler(buy_out=1_000_000, sell_out=int(0.97 * 10**16))
+
+        def handler(payload):
+            tx = payload["params"][0]
+            if (tx["data"].startswith("0x04e45aaf")
+                    and (tx.get("from") or "").lower() == holder):
+                return _Revert()                                # blacklisted address
+            return base(payload)
+        rep = await self._report(handler, top_holders=[holder, holder])
+        self.assertTrue(rep.is_honeypot)
+        self.assertTrue(any("blacklist" in f for f in rep.high_risk_flags), rep.high_risk_flags)
+
 
 class TestLpLock(unittest.IsolatedAsyncioTestCase):
     def test_norm_lockers_merges_both_shapes(self):

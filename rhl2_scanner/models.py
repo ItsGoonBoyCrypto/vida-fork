@@ -113,6 +113,7 @@ class TokenSnapshot:
     top10_supply_pct: Optional[float] = None
     top1_supply_pct: Optional[float] = None
     holder_growth_1h: Optional[int] = None           # net new holders last hour
+    top_holders: list = field(default_factory=list)  # top holder addrs (sell-sim impersonation)
 
     # Discovery / hype
     dex_boosted: bool = False

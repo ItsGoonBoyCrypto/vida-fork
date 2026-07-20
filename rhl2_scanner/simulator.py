@@ -250,7 +250,8 @@ class HoneypotSimulator:
             # measure a value-matched round-trip (buy WETH->token, then sell the
             # tokens back) and only credit "sellable" when real proceeds come
             # back. Unmeasurable => None (unconfirmed), never a false "Sellable".
-            report.is_honeypot = await self._v3_roundtrip(token, weth, router, bal_slot)
+            report.is_honeypot = await self._v3_roundtrip(
+                token, weth, router, bal_slot, report=report, snap=snap)
             return
 
         # V2: single pool per pair, so a revert is a meaningful "can't sell".
@@ -295,8 +296,24 @@ class HoneypotSimulator:
         words = _decode_words(result, 1)
         return status, (words[0] if words else None)
 
+    async def _v3_out_from(self, router: str, token_in: str, token_out: str, fee: int,
+                           amount_in: int, overrides: dict, frm: str) -> tuple[str, Optional[int]]:
+        """Like _v3_out but the swap originates FROM `frm` (a real holder), so an
+        address-keyed blacklist that spares the burner still trips here."""
+        data = (
+            "0x" + _SEL_V3_EXACT_IN_SINGLE
+            + _addr(token_in) + _addr(token_out) + _w(int(fee))
+            + _addr(frm)           # recipient = the impersonated holder
+            + _w(amount_in) + _w(0) + _w(0)
+        )
+        status, result = await self._call_status(router, data, overrides, frm=frm)
+        if status != "ok" or not result:
+            return status, None
+        words = _decode_words(result, 1)
+        return status, (words[0] if words else None)
+
     async def _v3_roundtrip(self, token: str, weth: str, router: str,
-                            token_bal_slot: int) -> Optional[bool]:
+                            token_bal_slot: int, report=None, snap=None) -> Optional[bool]:
         """Value-matched round-trip honeypot check via eth_call + stateOverride.
 
         For each fee tier: buy (WETH->token) with an injected WETH balance, then
@@ -332,8 +349,55 @@ class HoneypotSimulator:
             loss_bps = int((1.0 - (eth_back / probe)) * 10000) if probe else 0
             if loss_bps >= max_loss_bps:
                 return True                                 # punitive round-trip -> effective honeypot
+            # Sellable at the test size — now run the extra scenarios that a
+            # single round-trip misses (max-sell traps + selective blacklists).
+            if report is not None:
+                blacklisted = await self._extra_sell_scenarios(
+                    token, weth, router, int(fee), tok_out, token_bal_slot,
+                    token_allow_slot, report, snap)
+                if blacklisted:
+                    return True                             # real holders can't sell
             return False                                    # measured, real proceeds -> sellable
         return None if not saw_pool else False
+
+    async def _extra_sell_scenarios(self, token, weth, router, fee, base_tokens,
+                                    token_bal_slot, token_allow_slot, report, snap) -> bool:
+        """Two scenarios beyond the base round-trip:
+
+        1. MAX-SELL trap — retry the sell at a much larger size. If the small
+           sell clears but a 25x sell reverts, the token caps sell size so you
+           can't exit a real position (max-tx / max-sell). A caution, not a hard
+           honeypot (you *can* sell small).
+        2. SELECTIVE BLACKLIST — impersonate real top holders (inject their
+           balance + allowance at THEIR address, not the burner's). An
+           address-keyed blacklist reverts on those addresses even though the
+           fresh burner sold fine — a can't-sell trap for actual buyers.
+        """
+        # 1) larger-size sell probe
+        big = base_tokens * 25
+        big_ov = self._bal_allow_override(token, token_bal_slot, token_allow_slot, router)
+        st_big, out_big = await self._v3_out(router, token, weth, fee, big, big_ov)
+        if st_big == "revert" or (out_big is not None and out_big == 0):
+            if "max-sell limit (can't exit a full position)" not in report.high_risk_flags:
+                report.high_risk_flags.append("max-sell limit (can't exit a full position)")
+
+        # 2) real-holder impersonation (needs the token's actual top holders)
+        holders = [h for h in (getattr(snap, "top_holders", None) or [])
+                   if isinstance(h, str) and h.lower() != BURNER]
+        blocked = 0
+        for holder in holders[:3]:
+            diff = {mapping_slot(holder, token_bal_slot): "0x" + _w(_BIG)}
+            if token_allow_slot is not None:
+                diff[nested_mapping_slot(holder, router, token_allow_slot)] = "0x" + _w(_BIG)
+            ov = {token.lower(): {"stateDiff": diff}}
+            st, out = await self._v3_out_from(router, token, weth, fee, base_tokens, ov, holder)
+            if st == "revert" or (out is not None and out == 0):
+                blocked += 1
+        if blocked and blocked >= min(2, len(holders[:3])):
+            if "selective blacklist (real holders can't sell)" not in report.high_risk_flags:
+                report.high_risk_flags.append("selective blacklist (real holders can't sell)")
+            return True                     # real holders can't sell -> honeypot
+        return False
 
     def _bal_allow_override(self, token: str, bal_slot: int,
                             allow_slot: Optional[int], spender: str) -> dict:

@@ -364,6 +364,7 @@ class EvmChainClient:
         if non_lp:
             snap.top10_supply_pct = round(100.0 * sum(q for _, q in non_lp[:10]) / total, 2)
             snap.top1_supply_pct = round(100.0 * non_lp[0][1] / total, 2)
+            snap.top_holders = [a for a, _ in non_lp[:10]]   # for sell-sim impersonation
         return True
 
     async def _enrich_distribution_legacy(self, snap: TokenSnapshot) -> None:
