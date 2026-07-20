@@ -2586,8 +2586,14 @@ class Scanner:
             if creator and creator not in self.cfg.known_launchpad_addresses():
                 hp = self.storage.is_honeypot_deployer(creator)
                 rep = self.storage.deployer_reputation(creator)
+                rug_gate = self.cfg.runtime.serial_rugger_gate_min
+                serial_rugger = (rug_gate and rep["rugs"] >= rug_gate
+                                 and rep["rugs"] > rep["wins"])
                 if hp:
                     snap.dev_note = f"⚠️ dev shipped {hp} honeypot(s) before"
+                elif serial_rugger:
+                    snap.dev_note = f"🚫 serial rugger — {rep['rugs']} prior rugs"
+                    snap.dev_blocked = True
                 elif rep["rugs"]:
                     snap.dev_note = f"⚠️ dev rugged {rep['rugs']}× before"
                 elif rep["wins"]:
@@ -2754,8 +2760,11 @@ class Scanner:
         # contract audit) — attached to the snapshot for the formatter.
         await self._attach_alert_intel(snap, result)
 
-        # Repeat scam-funder veto: the deployer was bankrolled by a wallet tied to
-        # multiple prior honeypots — suppress rather than alert.
+        # Serial-scammer vetoes: suppress rather than alert when the deployer is a
+        # repeat rugger, or was bankrolled by a wallet tied to multiple honeypots.
+        if snap.dev_blocked:
+            log.info("skip %s — serial rugger deployer", snap.symbol)
+            return result
         if snap.funder_blocked:
             log.info("skip %s — deployer funded by a repeat scam funder", snap.symbol)
             return result

@@ -342,7 +342,7 @@ def to_telegram_html(snap: TokenSnapshot, result: ScoreResult) -> str:
     header = _LEVEL_HEADER.get(result.level, "ALERT")
     badge = _chain_badge(snap)
     prefix = f"{badge} · " if badge else ""
-    lines = [f"{prefix}<b>{header} — ${sym}</b>  ·  {result.composite:.0f}/100"]
+    lines = [f"{prefix}<b>{header} — ${sym}</b>  ·  <b>{result.composite:.0f}/100</b>"]
 
     conv = _conviction_line(snap)
     if conv:

@@ -417,6 +417,10 @@ class RuntimeConfig:
     # CEX/bridge hot wallets (high fan-out) to avoid false positives.
     honeypot_trace_funder: bool = True
     funder_gate_min_hits: int = 2          # >= this many honeypots traced -> gate
+    # Serial-rugger gate: a deployer with this many prior rugs (and more rugs than
+    # winners — a prolific dev who also ships gems isn't auto-blocked) is a serial
+    # scammer; suppress its launches outright instead of just warning. 0 disables.
+    serial_rugger_gate_min: int = 3
 
     # --- Early-launch alerts (catch runners pre/just-after graduation) ---
     # Fresh tokens have few holders + concentrated supply + little volume, so

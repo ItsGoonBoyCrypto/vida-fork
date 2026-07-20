@@ -183,5 +183,61 @@ class TestAutoCaptureAndVeto(unittest.IsolatedAsyncioTestCase):
             sc.storage.close()
 
 
+class TestSerialRuggerGate(unittest.IsolatedAsyncioTestCase):
+    def _res(self):
+        return ScoreResult(composite=0.0, level=AlertLevel.SKIP, safety_passed=False,
+                           categories=[CategoryScore(name="m", raw=80, weight=0.5)])
+
+    def _snap(self):
+        s = TokenSnapshot(chain="robinhood", pair_address="0xp",
+                          token_address="0xnew", symbol="NEW")
+        s.safety = SafetyReport()
+        return s
+
+    async def _intel(self, sc, deployer):
+        async def creator(_):
+            return deployer
+        async def funder(_):
+            return ""                       # isolate the rugger path
+        sc._creator_of = creator  # type: ignore
+        sc._funder_of = funder    # type: ignore
+        snap = self._snap()
+        await sc._attach_alert_intel(snap, self._res())
+        return snap
+
+    async def test_serial_rugger_is_vetoed(self):
+        sc = _sc()
+        try:
+            for i in range(sc.cfg.runtime.serial_rugger_gate_min):
+                sc.storage.record_deployer_token("0xrugdev", f"0xr{i}", "rug")
+            snap = await self._intel(sc, "0xrugdev")
+            self.assertTrue(snap.dev_blocked)
+            self.assertIn("serial rugger", snap.dev_note)
+        finally:
+            sc.storage.close()
+
+    async def test_below_threshold_warns_only(self):
+        sc = _sc()
+        try:
+            sc.storage.record_deployer_token("0xdev", "0xr0", "rug")   # 1 rug
+            snap = await self._intel(sc, "0xdev")
+            self.assertFalse(snap.dev_blocked)
+            self.assertIn("rugged", snap.dev_note)
+        finally:
+            sc.storage.close()
+
+    async def test_prolific_dev_with_more_wins_not_blocked(self):
+        sc = _sc()
+        try:
+            for i in range(sc.cfg.runtime.serial_rugger_gate_min):
+                sc.storage.record_deployer_token("0xdev", f"0xr{i}", "rug")
+            for i in range(sc.cfg.runtime.serial_rugger_gate_min + 2):
+                sc.storage.record_deployer_token("0xdev", f"0xw{i}", "winner")
+            snap = await self._intel(sc, "0xdev")
+            self.assertFalse(snap.dev_blocked)          # winners outweigh rugs
+        finally:
+            sc.storage.close()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -133,6 +133,7 @@ class TokenSnapshot:
     kol_labels: list = field(default_factory=list)           # KOL names among buyers
     dev_note: str = ""              # deployer track record (prior winners/rugs/honeypots)
     funder_blocked: bool = False    # deployer funded by a repeat scam funder -> veto alert
+    dev_blocked: bool = False       # deployer is a serial rugger -> veto alert
     launchpad: str = ""             # origin launchpad name if known (e.g. "flap")
     curve_progress_pct: Optional[float] = None   # bonding-curve fill % (pre-graduation)
 
