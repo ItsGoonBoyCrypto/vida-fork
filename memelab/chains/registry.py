@@ -94,3 +94,29 @@ def get_adapter(chain: Chain, session=None):
         from .solana import SolanaAdapter
         return SolanaAdapter(cfg, session=session)
     raise ValueError(f"no adapter for {chain}")
+
+
+def safety_coverage(chain: Chain) -> dict:
+    """What safety screening is ACTUALLY active for a chain, given its config +
+    env. Prevents the operator believing screening is on where it silently isn't
+    (RH has no GoPlus id; BNB buyer/creator data needs an Etherscan key; Solana
+    honeypot/authority via RugCheck only)."""
+    import os
+    cfg = REGISTRY[chain]
+    has_etherscan = bool(os.environ.get("ETHERSCAN_API_KEY")
+                         or os.environ.get("BSCSCAN_API_KEY"))
+    if chain is Chain.SOLANA:
+        active = ["rugcheck (honeypot/authority/holders)"] if cfg.rugcheck_enabled else []
+        missing = [] if cfg.rugcheck_enabled else ["rugcheck disabled"]
+    else:
+        active, missing = [], []
+        (active if cfg.goplus_chain_id else missing).append(
+            "goplus token-security" + ("" if cfg.goplus_chain_id else " (no chain id → OFF)"))
+        (active if cfg.explorer_api_url else missing).append(
+            "blockscout distribution/creator" if cfg.explorer_api_url
+            else "blockscout (none configured)")
+        if cfg.etherscan_chain_id:
+            (active if has_etherscan else missing).append(
+                "etherscan buyer/creator fallback" if has_etherscan
+                else "etherscan fallback (no ETHERSCAN_API_KEY)")
+    return {"chain": chain.value, "active": active, "missing": missing}

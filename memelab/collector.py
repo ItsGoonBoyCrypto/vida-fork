@@ -86,12 +86,26 @@ class Collector:
         self._last_snap_count = None
 
     async def run_forever(self) -> None:
+        self._log_safety_coverage()
         while True:
             try:
                 await self.cycle()
             except Exception:
                 log.exception("collector cycle failed")
             await asyncio.sleep(self.cfg.cycle_seconds)
+
+    def _log_safety_coverage(self) -> None:
+        """State plainly, per chain, which safety screening is actually active —
+        so 'safety is on' is never assumed for a chain where it silently isn't."""
+        try:
+            from .chains.registry import safety_coverage
+            for chain in self.cfg.chains:
+                cov = safety_coverage(chain)
+                active = ", ".join(cov["active"]) or "NONE"
+                miss = ("; missing: " + ", ".join(cov["missing"])) if cov["missing"] else ""
+                log.info("safety coverage [%s]: %s%s", cov["chain"], active, miss)
+        except Exception:  # noqa: BLE001
+            log.debug("safety coverage report failed", exc_info=True)
 
     async def cycle(self) -> None:
         for chain in self.cfg.chains:

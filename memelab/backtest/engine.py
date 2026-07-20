@@ -157,12 +157,42 @@ def validate(signature: Signature, holdout: list) -> dict:
             best = {"f1": round(f1, 3), "precision": round(prec, 3),
                     "recall": round(rec, 3), "threshold": thr}
 
+    # HONEST precision at a FIXED 0.5 threshold — the swept max-F1 precision
+    # above is optimistic (the threshold was chosen ON this holdout). And apply a
+    # Wilson lower bound so a 2/2=100% fluke on a tiny holdout doesn't lower the
+    # live alert floor. This bounded value is what gates the deployed decision.
+    tp = sum(1 for p, w in scored if p >= 0.5 and w)
+    fp = sum(1 for p, w in scored if p >= 0.5 and not w)
+    fn = sum(1 for p, w in scored if p < 0.5 and w)
+    prec_fixed = tp / (tp + fp) if (tp + fp) else 0.0
+    rec_fixed = tp / (tp + fn) if (tp + fn) else 0.0
+    prec_lb = _wilson_lower_bound(tp, tp + fp)
+
     # lift: winner rate among the top-scored decile vs base rate
     scored.sort(key=lambda t: t[0], reverse=True)
     top = scored[: max(1, n // 10)]
     top_rate = sum(1 for _, w in top if w) / len(top)
     lift = (top_rate / base) if base else 0.0
-    return {"n": n, "base_rate": round(base, 3), "lift": round(lift, 2), **best}
+    return {"n": n, "base_rate": round(base, 3), "lift": round(lift, 2),
+            # deployed-gate metrics (fixed threshold + Wilson lower bound)
+            "precision": round(prec_lb, 3),
+            "precision_point": round(prec_fixed, 3),
+            "recall": round(rec_fixed, 3), "threshold": 0.5,
+            # keep the (optimistic) swept values for reference/debug
+            "precision_swept": best["precision"], "f1_swept": best["f1"]}
+
+
+def _wilson_lower_bound(successes: int, trials: int, z: float = 1.96) -> float:
+    """Lower bound of the Wilson score interval for a binomial proportion — a
+    small-sample-honest precision: 2/2 successes yields ~0.34, not 1.0."""
+    if trials <= 0:
+        return 0.0
+    phat = successes / trials
+    z2 = z * z
+    denom = 1.0 + z2 / trials
+    centre = phat + z2 / (2 * trials)
+    margin = z * ((phat * (1 - phat) / trials + z2 / (4 * trials * trials)) ** 0.5)
+    return max(0.0, (centre - margin) / denom)
 
 
 def run_backtest(store, win_multiple: float = 3.0, chains: list = None,

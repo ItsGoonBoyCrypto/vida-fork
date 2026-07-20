@@ -83,10 +83,12 @@ class SolanaAdapter(ChainAdapter):
         raw = data.get("score")
         if isinstance(raw, (int, float)):
             snap.external_risk_score = max(0.0, min(100.0, 100.0 - float(raw) / 100.0))
-        mint = data.get("mintAuthority")
-        freeze = data.get("freezeAuthority")
-        if mint is not None:
-            snap.mint_authority_revoked = not mint      # null authority = revoked
+        # Disambiguate revoked-vs-absent: only trust the field when RugCheck
+        # actually RETURNED it. A missing key (older/incomplete report) must stay
+        # unknown (None), not be read as "revoked" — that would pass a mintable
+        # token as safe. null value present = authority genuinely revoked.
+        if "mintAuthority" in data:
+            snap.mint_authority_revoked = not data.get("mintAuthority")
         # top holders concentration
         holders = data.get("topHolders") or []
         pcts = sorted((_f(h.get("pct")) for h in holders), reverse=True)

@@ -82,5 +82,25 @@ class TestScorer(unittest.TestCase):
         self.assertGreater(model_probability(win_fv, sig), model_probability(dud_fv, sig))
 
 
+class TestWilsonBound(unittest.TestCase):
+    def test_small_perfect_sample_is_discounted(self):
+        from memelab.backtest.engine import _wilson_lower_bound
+        # 2/2 "perfect" precision must NOT report as 1.0 on a live-gating metric
+        self.assertLess(_wilson_lower_bound(2, 2), 0.5)
+        # a large sample tightens toward the point estimate
+        self.assertGreater(_wilson_lower_bound(90, 100), 0.8)
+        # degenerate inputs are safe
+        self.assertEqual(_wilson_lower_bound(0, 0), 0.0)
+        self.assertEqual(_wilson_lower_bound(0, 5), 0.0)
+
+    def test_validate_reports_bounded_precision(self):
+        from memelab.backtest.engine import validate, derive
+        sig = derive(_dataset(), win_multiple=3.0, chains=[Chain.SOLANA])
+        m = validate(sig, _dataset())
+        # the deployed 'precision' is the Wilson lower bound (<= the point value)
+        self.assertLessEqual(m["precision"], m["precision_point"] + 1e-9)
+        self.assertIn("precision_swept", m)
+
+
 if __name__ == "__main__":
     unittest.main()
