@@ -74,6 +74,7 @@ def merge_reports(*reports: SafetyReport) -> SafetyReport:
     out.dev_recent_sell = _or_danger(*[r.dev_recent_sell for r in reports])
     out.owner_can_rug = _or_danger(*[r.owner_can_rug for r in reports])
     out.owner_active = _or_danger(*[r.owner_active for r in reports])
+    out.is_upgradeable = _or_danger(*[r.is_upgradeable for r in reports])
 
     # Union of owner-capability hooks (for display).
     hooks: list[str] = []

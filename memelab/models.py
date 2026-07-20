@@ -81,6 +81,10 @@ class TokenSnapshot:
     lp_burned_or_locked: Optional[bool] = None
     mint_authority_revoked: Optional[bool] = None    # SPL / mintable
     external_risk_score: Optional[float] = None      # GoPlus / RugCheck 0-100
+    # Solana Token-2022 danger extensions found (permanent-delegate, transfer
+    # hook, non-transferable, settable transfer-fee, default-frozen). A token can
+    # pass mint/freeze/LP checks and still rug via one of these.
+    token2022_flags: list = field(default_factory=list)
 
     # Discovery / social / alpha
     launchpad: str = ""                   # "flap" | "pumpfun" | "" …

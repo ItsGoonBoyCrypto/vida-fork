@@ -104,15 +104,23 @@ class _Resp:
 
 
 class _Session:
-    """Fake JSON-RPC: returns bytecode for eth_getCode, an owner for owner()."""
+    """Fake JSON-RPC: eth_getCode, owner() via eth_call, and (optional) an
+    EIP-1967 implementation slot + per-address bytecode for proxy tests."""
 
-    def __init__(self, code, owner):
+    def __init__(self, code, owner, impl=None, impl_code=None):
         self.code, self.owner = code, owner
+        self.impl, self.impl_code = impl, impl_code
 
     def post(self, url, json=None):
         m = json.get("method")
-        if m == "eth_getCode":
-            res = self.code
+        if m == "eth_getStorageAt":
+            # implementation slot -> impl address (zero when not a proxy)
+            word = ("0x" + "0" * 24 + self.impl.replace("0x", "")) if self.impl \
+                else "0x" + "0" * 64
+            res = word
+        elif m == "eth_getCode":
+            addr = (json.get("params") or ["", ""])[0].lower()
+            res = self.impl_code if (self.impl and addr == self.impl.lower()) else self.code
         elif m == "eth_call":
             res = "0x" + "0" * 24 + self.owner.replace("0x", "")   # owner() word
         else:
@@ -148,6 +156,37 @@ class TestChainWiring(unittest.IsolatedAsyncioTestCase):
         await client._assess_owner_mutability("0x" + "a" * 40, dead, report)
         self.assertIs(report.owner_active, False)
         self.assertIs(report.owner_can_rug, False)   # hooks inert once renounced
+
+    async def test_upgradeable_proxy_scans_implementation(self):
+        from rhl2_scanner.sources.chain import EvmChainClient
+        cfg = Config()
+        cfg.chain.rpc_url = "http://node"
+        owner = "0x" + "1" * 40
+        impl = "0x" + "b" * 40
+        # proxy's own code is a bare stub; the hook lives in the implementation
+        sess = _Session(_code(), owner, impl=impl,
+                        impl_code=_code("blacklist(address,bool)"))
+        client = EvmChainClient(cfg, session=sess)
+        report = SafetyReport()
+        await client._assess_owner_mutability("0x" + "a" * 40, owner, report)
+        self.assertIs(report.is_upgradeable, True)
+        self.assertTrue(report.owner_can_rug)                 # hook found in impl
+        self.assertIn("owner can blacklist wallets", report.owner_hooks)
+
+    async def test_renounced_but_upgradeable_not_cleared(self):
+        # renounced owner would normally neutralise hooks, but an upgradeable
+        # proxy's admin can swap the logic — so don't assert owner_can_rug=False
+        from rhl2_scanner.sources.chain import EvmChainClient
+        cfg = Config()
+        cfg.chain.rpc_url = "http://node"
+        dead = "0x000000000000000000000000000000000000dead"
+        impl = "0x" + "b" * 40
+        sess = _Session(_code(), dead, impl=impl, impl_code=_code())
+        client = EvmChainClient(cfg, session=sess)
+        report = SafetyReport()
+        await client._assess_owner_mutability("0x" + "a" * 40, dead, report)
+        self.assertIs(report.is_upgradeable, True)
+        self.assertIsNone(report.owner_can_rug)               # not asserted False
 
 
 if __name__ == "__main__":

@@ -58,6 +58,9 @@ class SafetyReport:
     owner_active: Optional[bool] = None
     owner_can_rug: Optional[bool] = None
     owner_hooks: list[str] = field(default_factory=list)
+    # Upgradeable proxy (EIP-1967): the contract's LOGIC can be swapped after you
+    # buy, so a token that's clean now can become a honeypot on the next upgrade.
+    is_upgradeable: Optional[bool] = None
 
     @property
     def lp_safe(self) -> bool:

@@ -106,6 +106,60 @@ class SolanaAdapter(ChainAdapter):
         if "honeypot" in risks or "cannot sell" in risks:
             snap.is_honeypot = True
 
+        # Token-2022 danger extensions: permanent-delegate / transfer-hook /
+        # non-transferable / default-frozen / settable transfer-fee. These pass
+        # mint & freeze checks yet still rug — the biggest active Solana vector.
+        try:
+            from ..token2022 import scan_rugcheck
+            t22 = scan_rugcheck(data)
+            # An optional direct getAccountInfo(jsonParsed) is higher-fidelity;
+            # merge it in when a Solana RPC is configured.
+            acct = await self._token2022_via_rpc(snap.token_address)
+            if acct["flags"]:
+                for f in acct["flags"]:
+                    if f not in t22["flags"]:
+                        t22["flags"].append(f)
+                t22["honeypot"] = t22["honeypot"] or acct["honeypot"]
+                t22["settable_fee"] = t22["settable_fee"] or acct["settable_fee"]
+                if acct["fee_pct"] is not None:
+                    t22["fee_pct"] = max(t22.get("fee_pct") or 0.0, acct["fee_pct"])
+            if t22["flags"]:
+                snap.token2022_flags = t22["flags"]
+            if t22["honeypot"]:
+                snap.is_honeypot = True          # can be blocked or drained
+            if t22["settable_fee"]:
+                fee = t22.get("fee_pct")
+                # surface as sell-tax so the existing tax gate/alert reacts;
+                # a live fee ≥ threshold is a trap, an unknown fee is a caution.
+                snap.sell_tax_pct = max(snap.sell_tax_pct or 0.0, fee if fee else 0.0)
+        except Exception:  # noqa: BLE001
+            log.debug("token-2022 scan failed", exc_info=True)
+
+    async def _token2022_via_rpc(self, mint: str) -> dict:
+        """getAccountInfo(jsonParsed) → extension list, if a Solana RPC is set.
+
+        Empty result (no RPC / not token-2022 / error) is safe — the RugCheck
+        parse already ran; this only *adds* fidelity when an endpoint exists.
+        """
+        from ..token2022 import scan_extensions
+        import os
+        rpc = os.environ.get("MEMELAB_SOLANA_RPC") or getattr(self.config, "rpc_url", "")
+        if not rpc or self._session is None:
+            return {"flags": [], "honeypot": False, "settable_fee": False, "fee_pct": None}
+        payload = {"jsonrpc": "2.0", "id": 1, "method": "getAccountInfo",
+                   "params": [mint, {"encoding": "jsonParsed"}]}
+        try:
+            async with self._session.post(rpc, json=payload) as r:
+                if r.status != 200:
+                    return {"flags": [], "honeypot": False, "settable_fee": False, "fee_pct": None}
+                data = await r.json()
+        except Exception:  # noqa: BLE001
+            return {"flags": [], "honeypot": False, "settable_fee": False, "fee_pct": None}
+        info = (((data or {}).get("result") or {}).get("value") or {}).get("data") or {}
+        parsed = info.get("parsed") if isinstance(info, dict) else None
+        exts = ((parsed or {}).get("info") or {}).get("extensions") if parsed else None
+        return scan_extensions(exts)
+
     async def _get(self, url: str):
         for attempt in range(4):
             try:

@@ -47,6 +47,11 @@ _SEL_OWNER = "0x8da5cb5b"       # owner()
 _SEL_GET_OWNER = "0x893d20e8"   # getOwner()
 _SEL_TOTAL_SUPPLY = "0x18160ddd"  # totalSupply()
 
+# EIP-1967 implementation storage slot: keccak256('eip1967.proxy.implementation')-1.
+_EIP1967_IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+# Legacy OpenZeppelin (zeppelinos) implementation slot.
+_LEGACY_IMPL_SLOT = "0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3"
+
 
 class EvmChainClient:
     """SafetySource + DistributionSource backed by RPC + explorer."""
@@ -245,16 +250,38 @@ class EvmChainClient:
         """
         from ..owner_audit import owner_is_active, scan_bytecode
         report.owner_active = owner_is_active(owner, BURN_ADDRESSES)
-        code = await self._get_code(token)
+        # Proxy detection: if the token is an upgradeable proxy, its own bytecode
+        # is just a forwarding stub — the real logic (and the dangerous hooks)
+        # live in the IMPLEMENTATION, which the admin can swap out post-buy.
+        impl = await self._proxy_implementation(token)
+        report.is_upgradeable = impl is not None
+        scan_target = impl or token
+        code = await self._get_code(scan_target)
         if not code:
             return
         scan = scan_bytecode(code)
         report.owner_hooks = scan["hooks"]
         if report.owner_active is True and scan["can_rug"]:
             report.owner_can_rug = True
-        elif report.owner_active is False:
-            report.owner_can_rug = False        # renounced -> hooks are inert
-        # active unknown + hooks present -> leave None (surfaced as caution, not gated)
+        elif report.owner_active is False and not report.is_upgradeable:
+            report.owner_can_rug = False        # renounced + immutable -> inert
+        # active-unknown, or renounced-but-upgradeable (admin can still swap the
+        # logic), leaves the verdict None: surfaced as a caution, not hard-gated.
+
+    async def _proxy_implementation(self, token: str) -> Optional[str]:
+        """Return the implementation address if `token` is an EIP-1967 proxy.
+
+        Reads the standard implementation storage slot (and the legacy
+        zeppelinos slot). A non-zero value => upgradeable proxy.
+        """
+        for slot in (_EIP1967_IMPL_SLOT, _LEGACY_IMPL_SLOT):
+            res = await self._rpc("eth_getStorageAt", [token, slot, "latest"])
+            if not res or len(res) < 66:
+                continue
+            addr = res[-40:]
+            if int(addr, 16) != 0:
+                return "0x" + addr
+        return None
 
     async def _get_code(self, token: str) -> Optional[str]:
         return await self._rpc("eth_getCode", [token, "latest"])

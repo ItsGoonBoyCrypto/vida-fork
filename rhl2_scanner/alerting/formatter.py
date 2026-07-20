@@ -175,6 +175,8 @@ def _owner_line(snap: TokenSnapshot) -> str:
         return "🔒 Ownership renounced"
     if s.owner_active is True and s.owner_hooks:
         return f"🔓 Owner active — {escape(s.owner_hooks[0])} (not renounced)"
+    if s.is_upgradeable is True:
+        return "🧬 Upgradeable proxy — logic can change after you buy"
     return ""
 
 

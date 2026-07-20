@@ -36,6 +36,8 @@ def format_screen_html(scr: Screen, signature_precision: Optional[float] = None)
     ]
     if scr.reasons:
         lines.append("Why: " + ", ".join(escape(r) for r in scr.reasons[:6]))
+    if s.token2022_flags:
+        lines.append("⚠️ Token-2022: " + escape(", ".join(s.token2022_flags[:3])))
     links = []
     if s.pair_address:
         links.append(f'<a href="https://dexscreener.com/{s.chain.value}/{escape(s.pair_address)}">Chart</a>')
