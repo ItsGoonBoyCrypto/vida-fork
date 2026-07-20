@@ -531,6 +531,11 @@ class WalletWatchConfig:
     alert_on: str = "buys"                            # "buys" | "buys_sells"
     min_usd: float = 100.0                            # ignore transfers below this USD
     max_transfers_per_wallet: int = 25               # per poll, per wallet
+    # Also watch our LEARNED reputation set (harvested smart + core-alpha
+    # wallets), not just the static `wallets` list — a Cielo-style feed of the
+    # wallets our own winner-harvest proved sharp. Capped to bound explorer load.
+    watch_smart_set: bool = True
+    max_watched: int = 40                             # cap on total wallets polled
     # Emit individual "🐋 whale bought X" pings. Off => still POLL these wallets
     # and feed their buys into the smart-money cluster signal + gem scoring, just
     # without the per-buy notifications. (Cluster convergence alerts are separate

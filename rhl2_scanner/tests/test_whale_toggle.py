@@ -65,5 +65,42 @@ class TestEmitToggle(unittest.IsolatedAsyncioTestCase):
             sc.storage.close()
 
 
+class TestWatchedSet(unittest.TestCase):
+    def test_learned_reputation_set_is_watched(self):
+        from rhl2_scanner.storage import Storage
+        from rhl2_scanner.walletwatch import WalletWatcher
+        cfg = Config()
+        cfg.chain.explorer_api_url = "https://exp/api"
+        cfg.wallet_watch.enabled = True
+        cfg.wallet_watch.wallets = [W1]                 # one static wallet
+        cfg.wallet_watch.watch_smart_set = True
+        s = Storage(":memory:")
+        try:
+            s.add_smart_wallet(W2, source="winner:0xtok")   # a harvested wallet
+            ww = WalletWatcher(cfg, s)
+            watched = ww._watched_wallets()
+            self.assertIn(W1.lower(), watched)          # static
+            self.assertIn(W2.lower(), watched)          # learned
+            self.assertTrue(ww.enabled())
+        finally:
+            s.close()
+
+    def test_disabled_smart_set_only_static(self):
+        from rhl2_scanner.storage import Storage
+        from rhl2_scanner.walletwatch import WalletWatcher
+        cfg = Config()
+        cfg.chain.explorer_api_url = "https://exp/api"
+        cfg.wallet_watch.enabled = True
+        cfg.wallet_watch.wallets = [W1]
+        cfg.wallet_watch.watch_smart_set = False
+        s = Storage(":memory:")
+        try:
+            s.add_smart_wallet(W2, source="winner:0xtok")
+            watched = WalletWatcher(cfg, s)._watched_wallets()
+            self.assertEqual(watched, [W1.lower()])
+        finally:
+            s.close()
+
+
 if __name__ == "__main__":
     unittest.main()

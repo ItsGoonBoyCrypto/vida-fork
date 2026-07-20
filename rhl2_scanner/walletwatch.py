@@ -66,8 +66,32 @@ class WalletWatcher:
         if self._owns_session and self._session is not None:
             await self._session.close()
 
+    def _watched_wallets(self) -> list[str]:
+        """The wallets to watch: the static config list UNION our LEARNED
+        reputation set (harvested smart wallets + core-alpha), capped and
+        deduped. This turns the feed into a Cielo-style tracker of the very
+        wallets our own winner-harvest proved sharp — not just a hand list."""
+        seen: dict[str, None] = {}
+        for w in self.ww.wallets:
+            wl = (w or "").lower()
+            if wl:
+                seen[wl] = None
+        if self.ww.watch_smart_set:
+            try:
+                learned = self.storage.smart_wallets()          # harvested + seeded
+            except Exception:  # noqa: BLE001
+                learned = []
+            for w in learned:
+                wl = (w or "").lower()
+                if wl and wl not in seen:
+                    seen[wl] = None
+                if len(seen) >= self.ww.max_watched:
+                    break
+        return list(seen)[: self.ww.max_watched]
+
     def enabled(self) -> bool:
-        return bool(self.ww.enabled and self.ww.wallets and self.cfg.chain.explorer_api_url)
+        has_wallets = bool(self.ww.wallets) or self.ww.watch_smart_set
+        return bool(self.ww.enabled and has_wallets and self.cfg.chain.explorer_api_url)
 
     async def poll(self) -> list[WhaleEvent]:
         """Return NEW, size-filtered whale events since the last poll."""
@@ -77,7 +101,7 @@ class WalletWatcher:
         dex = DexScreenerClient(self.cfg, session=self._session)
         want_sells = self.ww.alert_on == "buys_sells"
 
-        for wallet in self.ww.wallets:
+        for wallet in self._watched_wallets():
             # First time we ever poll a wallet: seed its recent history as "seen"
             # WITHOUT alerting, so we only alert on genuinely new activity after.
             seed_key = f"__seeded__|{wallet}"
