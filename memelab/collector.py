@@ -87,12 +87,31 @@ class Collector:
 
     async def run_forever(self) -> None:
         self._log_safety_coverage()
+        await self._harvest_exemplars()
         while True:
             try:
                 await self.cycle()
             except Exception:
                 log.exception("collector cycle failed")
             await asyncio.sleep(self.cfg.cycle_seconds)
+
+    async def _harvest_exemplars(self) -> None:
+        """Pull the early/top wallets of curated WINNER tokens into the smart set
+        (once each) so the system learns the wallets behind known big movers."""
+        if self.smart_money is None:
+            return
+        import os
+        from .winner_exemplars import load_exemplars
+        exemplars = load_exemplars(os.environ.get("MEMELAB_WINNER_EXEMPLARS", ""))
+        for chain, token, label in exemplars:
+            try:
+                added = await self.smart_money.harvest_winner(
+                    chain, token, mult=self.cfg.win_multiple)
+                if added:
+                    log.info("exemplar harvest: +%d early wallets from %s (%s)",
+                             added, token, label)
+            except Exception:  # noqa: BLE001
+                log.debug("exemplar harvest failed for %s", token, exc_info=True)
 
     def _log_safety_coverage(self) -> None:
         """State plainly, per chain, which safety screening is actually active —

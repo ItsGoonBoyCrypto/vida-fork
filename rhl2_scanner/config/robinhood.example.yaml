@@ -199,7 +199,7 @@ tiers:
       min_external_risk_score: 60
       smart_money_min_wallets: 2
       strong_alert_score: 75        # >= 75 = Strong alert
-      watch_alert_score: 63         # was 50 — raised to cut the Watch-band flood
+      watch_alert_score: 66         # was 63 — raised again to cut the Watch flood further
       # Graduation-imminent boost: a flap token 55-92% bonded is at the sweet spot
       # where the run often starts, but has no DEX pair yet (thin momentum data).
       # These composite points let a genuinely-imminent one reach the alert band.
@@ -230,6 +230,15 @@ runtime:
   early_launch_min_holders: 25          # reject dead launches (a handful of holders)
   early_launch_min_buy_ratio_1h: 0.55   # require net buying when txns exist
   early_launch_min_volume_1h_usd: 800   # require some real 1h volume when known
+  # PRECISION: fewer, higher-conviction alerts. Conviction fuses composite +
+  # winner-signature + curve match + core-alpha + smart-money + alpha wallets,
+  # so a high floor here demands real CONFLUENCE (the thing that separates a
+  # 2-5x from noise), not just "safe + a pool". Raised 45 -> 60. Signal-bypass
+  # alerts (a proven core-alpha / cluster / alpha-wallet buy) still fire below it.
+  early_launch_min_conviction: 60
+  # Secondary maturity floor (watch/strong gate on composite via the tier bands
+  # below; this is the hard minimum). Raised 55 -> 62.
+  min_alert_score: 62
   # Live alerts on RH Chain today: strict on all confirmable metrics (verified,
   # authorities revoked, LP burned, top10/holders/bundle/momentum) + router-free
   # honeypot check; tolerates unconfirmed tax until a V3 router/oracle is wired.
