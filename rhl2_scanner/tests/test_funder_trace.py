@@ -241,3 +241,27 @@ class TestSerialRuggerGate(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFunderChain(unittest.IsolatedAsyncioTestCase):
+    async def test_walks_hops_and_stops_at_exclusion(self):
+        from rhl2_scanner.config import Config
+        from rhl2_scanner.scanner import Scanner
+        cfg = Config()
+        cfg.runtime.db_path = ":memory:"
+        cfg.chain.funder_exclude_addresses = ["0x" + "e" * 40]   # a CEX root
+        sc = Scanner(cfg)
+        try:
+            # deployer <- relay <- master <- CEX(excluded)
+            graph = {
+                "0xdeployer": "0x" + "1" * 40,
+                "0x" + "1" * 40: "0x" + "2" * 40,
+                "0x" + "2" * 40: "0x" + "e" * 40,   # excluded -> stop
+            }
+            async def fake_funder(addr):
+                return graph.get(addr.lower(), "")
+            sc._funder_of = fake_funder  # type: ignore
+            chain = await sc._funder_chain("0xdeployer", hops=3)
+            self.assertEqual(chain, ["0x" + "1" * 40, "0x" + "2" * 40])  # stops before CEX
+        finally:
+            sc.storage.close()

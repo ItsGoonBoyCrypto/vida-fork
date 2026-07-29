@@ -750,8 +750,10 @@ class Scanner:
         return best
 
     async def _fresh_buyer_signal(self, token: str) -> tuple[float, str]:
-        """Resolve the ages of a token's earliest buyers → (conviction_delta, note).
-        Heavily-fresh early buyers = bot/sniper launch (demote)."""
+        """One early-buyers fetch → TWO signals folded together:
+          · wallet-age (bot/sniper launch vs real hands), and
+          · predatory-sniper presence (known rug-dominant extractors buying in).
+        Returns (conviction_delta, note)."""
         if self._session is None:
             return 0.0, ""
         try:
@@ -763,10 +765,35 @@ class Scanner:
                 ts = await self._wallet_first_ts(w)
                 if ts:
                     first_seen[w] = ts
-            return age_verdict(fresh_buyer_ratio(first_seen, time.time()))
+            delta, note = age_verdict(fresh_buyer_ratio(first_seen, time.time()))
+            # Predatory-sniper overlay (reuses the buyers we just fetched).
+            snipers = self.storage.predatory_snipers(buyers)
+            if snipers:
+                pen = min(18.0, 8.0 + 4.0 * (len(snipers) - 1))
+                delta -= pen
+                snote = f"🎯 {len(snipers)} predatory-sniper wallet(s) in early buyers"
+                note = f"{note} · {snote}" if note else snote
+            return delta, note
         except Exception:  # noqa: BLE001
-            log.debug("fresh-buyer signal failed", exc_info=True)
+            log.debug("early-buyer intel failed", exc_info=True)
             return 0.0, ""
+
+    async def _funder_chain(self, address: str, hops: int = 2) -> list:
+        """Walk the funding chain up to `hops` levels: [direct funder, its
+        funder, …]. Stops at a CEX/bridge/launchpad exclusion (a high-fan-out
+        root isn't a scammer) or when a level can't be resolved."""
+        chain: list = []
+        seen = {address.lower()}
+        excl = self.cfg.funder_exclusions()
+        cur = address
+        for _ in range(max(1, hops)):
+            f = await self._funder_of(cur)
+            if not f or f in seen or f in excl:
+                break
+            chain.append(f)
+            seen.add(f)
+            cur = f
+        return chain
 
     async def _trace_scam_funder(self, deployer: str, token: str) -> int:
         """Resolve a scam deployer's funder and blocklist it. Returns its count
@@ -2991,15 +3018,23 @@ class Scanner:
                 elif rep["wins"]:
                     snap.dev_note = f"🔥 dev launched {rep['wins']} prior winner(s)"
 
-                # Funding-wallet check: is this deployer bankrolled by a wallet
-                # that funded prior scams? Warns on a single hit; vetoes the alert
-                # once the funder has funded funder_gate_min_hits+ honeypots.
+                # Funding-wallet check across a MULTI-HOP chain: a scammer who
+                # inserts a relay wallet between their master funder and the
+                # deployer evades a 1-hop trace, so walk up to N hops and match
+                # any level against the toxic-funder blocklist.
                 if self.cfg.runtime.honeypot_trace_funder and not hp:
-                    funder = await self._funder_of(creator)
-                    hits = self.storage.is_toxic_funder(funder) if funder else 0
+                    chain = await self._funder_chain(
+                        creator, hops=self.cfg.runtime.funder_trace_hops)
+                    hits, hop = 0, 0
+                    for i, funder in enumerate(chain, start=1):
+                        h = self.storage.is_toxic_funder(funder)
+                        if h:
+                            hits, hop = h, i
+                            break
                     if hits:
+                        via = "" if hop == 1 else f" ({hop} hops up)"
                         snap.dev_note = (f"⚠️ deployer funded by a wallet tied to "
-                                         f"{hits} prior scam(s)")
+                                         f"{hits} prior scam(s){via}")
                         if hits >= self.cfg.runtime.funder_gate_min_hits:
                             snap.funder_blocked = True
         except Exception:  # noqa: BLE001

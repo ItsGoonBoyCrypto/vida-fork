@@ -590,6 +590,23 @@ class Storage:
             (deployer.lower(), token.lower(), outcome, time.time()))
         self._conn.commit()
 
+    def predatory_snipers(self, wallets: list[str], min_appearances: int = 3,
+                          min_rug_ratio: float = 0.7) -> set:
+        """Of the given wallets, those that are PREDATORY snipers — early on many
+        tokens that rugged and few that won (rug/(rug+win) >= ratio). Distinct
+        from 'toxic' (absolute rug count): this is a ratio test that catches pure
+        extractors who dump on holders. Returns the offending subset."""
+        if not wallets:
+            return set()
+        rep = self.wallet_reputation_rows(wallets)
+        out = set()
+        for w, r in rep.items():
+            rugs, wins = r.get("rug_count", 0), r.get("winner_overlap", 0)
+            total = rugs + wins
+            if total >= min_appearances and rugs / total >= min_rug_ratio:
+                out.add(w)
+        return out
+
     def wallet_reputation_rows(self, wallets: list[str]) -> dict:
         """Bulk-load the raw reputation counters for a set of wallets.
 

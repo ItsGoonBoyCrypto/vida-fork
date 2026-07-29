@@ -431,6 +431,7 @@ class RuntimeConfig:
     # CEX/bridge hot wallets (high fan-out) to avoid false positives.
     honeypot_trace_funder: bool = True
     funder_gate_min_hits: int = 2          # >= this many honeypots traced -> gate
+    funder_trace_hops: int = 2             # walk N funding hops (defeats a relay wallet)
     # Serial-rugger gate: a deployer with this many prior rugs (and more rugs than
     # winners — a prolific dev who also ships gems isn't auto-blocked) is a serial
     # scammer; suppress its launches outright instead of just warning. 0 disables.
