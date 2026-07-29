@@ -2988,6 +2988,22 @@ class Scanner:
             except Exception:  # noqa: BLE001
                 log.debug("fresh-buyer check failed", exc_info=True)
 
+        # Demand quality: volume-without-holders = wash/distribution (rug-forming);
+        # a growing holder base = real demand. Uses snapshot fields (no extra calls).
+        try:
+            from .demand import demand_signal
+            d_delta, d_note = demand_signal(
+                snap.holder_count, snap.volume_1h, snap.market_cap_usd,
+                snap.age_minutes, snap.holder_growth_1h)
+            if d_delta:
+                snap.conviction = max(0.0, min(100.0, snap.conviction + d_delta))
+                snap.conviction_factors = list(snap.conviction_factors) + [
+                    ("demand", round(d_delta, 1))]
+            if d_note:
+                snap.demand_note = d_note
+        except Exception:  # noqa: BLE001
+            log.debug("demand signal failed", exc_info=True)
+
         # Exit plan from the learned top-zone model + the configured stop.
         model = self._exit_model() if self.cfg.runtime.exit_intel_enabled else None
         if model:
