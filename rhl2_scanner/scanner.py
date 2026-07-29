@@ -2676,6 +2676,13 @@ class Scanner:
                 except Exception:
                     log.exception("%s settle failed", name)
 
+        # Auto-harvest big movers: any tracked alert whose peak reached the
+        # threshold (e.g. 10x) — harvest its early buyers into the smart set once.
+        try:
+            await self._harvest_big_movers()
+        except Exception:
+            log.exception("big-mover harvest failed")
+
         # Follow-up alerts on tokens we alerted on: milestones (📈) + dumps (⚠️).
         try:
             await self._monitor_positions(dex)
@@ -3160,6 +3167,39 @@ class Scanner:
                                            source_prefix="auto")
         if added:
             log.info("autoseed: harvested %d early buyers of $%s (winner)", added, snap.symbol)
+
+    async def _harvest_big_movers(self) -> None:
+        """Harvest the early buyers of ANY alert whose tracked peak reached the
+        big-mover multiple (e.g. 10x) — once each. This is how a runner that fired
+        at a weak tier (the 132x in the watch band) still teaches us the wallets
+        behind it, so their next early buy gets caught."""
+        rc = self.cfg.runtime
+        if not rc.bigmover_harvest_enabled or self._session is None:
+            return
+        movers = self.storage.paper_trades_over_mult(rc.bigmover_harvest_mult)
+        for row in movers[:5]:            # bounded per cycle (explorer reads)
+            token = (row["token_address"] or "").lower()
+            if not token or not token.startswith("0x"):
+                continue                  # RH scanner harvests EVM ids only
+            if not self.storage.pos_event_new("bigmover|" + token):
+                continue                  # already harvested this one
+            peak = row["max_mult"] or 0.0
+            added = await self._harvest_buyers(
+                token, row["symbol"] or "?", source_prefix="bigmover", mult=peak)
+            log.info("BIG-MOVER harvest: %s peaked %.1fx → +%d early wallets",
+                     row["symbol"] or token, peak, added)
+            # Surface it so you SEE which runner it was (and its CA) — you
+            # flagged not having the address of the big one.
+            self._reply_chat = None
+            try:
+                from html import escape as _esc
+                await self._send_html(
+                    f"🌟 <b>Big mover harvested</b> — ${_esc(row['symbol'] or '?')} "
+                    f"peaked <b>{peak:.1f}x</b>\n<code>{_esc(token)}</code>\n"
+                    f"Added {added} early wallet(s) to the smart set — their next "
+                    "early buy will alert.")
+            except Exception:  # noqa: BLE001
+                pass
 
     async def _harvest_buyers(self, token: str, symbol: str, source_prefix: str,
                               mult: float = 0.0) -> int:

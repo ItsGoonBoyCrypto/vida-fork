@@ -441,6 +441,15 @@ class Storage:
         cur = self._conn.execute("SELECT * FROM paper_trades ORDER BY entry_ts")
         return cur.fetchall()
 
+    def paper_trades_over_mult(self, mult: float) -> list[sqlite3.Row]:
+        """Tracked alerts whose peak reached >= mult — the confirmed big movers,
+        newest peak first. Feeds auto-harvest + the top-movers report."""
+        cur = self._conn.execute(
+            "SELECT token_address, pair_address, symbol, max_mult FROM paper_trades "
+            "WHERE token_address IS NOT NULL AND max_mult >= ? "
+            "ORDER BY max_mult DESC", (mult,))
+        return cur.fetchall()
+
     # -- wallet-activity dedup ------------------------------------------
 
     def wallet_event_is_new(self, tx_key: str) -> bool:

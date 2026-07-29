@@ -370,6 +370,15 @@ class RuntimeConfig:
     winner_harvest_batch: int = 20             # tokens re-priced per sweep (rate-limit guard)
     winner_harvest_interval_hours: float = 1.0
 
+    # --- Big-mover auto-harvest ---
+    # ANY alerted token whose tracked peak reaches this multiple gets its early
+    # buyers harvested into the smart set automatically (once), regardless of the
+    # alert tier it fired at. This captures the wallets behind the real runners
+    # — e.g. the 132x that sat in the watch band — so their next early buy is
+    # caught. Runs off the paper/perf peak the position monitor already tracks.
+    bigmover_harvest_enabled: bool = True
+    bigmover_harvest_mult: float = 10.0
+
     # --- Smart-money CLUSTER alert ---
     # When this many DISTINCT smart-money wallets buy the same token within the
     # window, fire a high-priority "cluster" alert — convergence of proven early
