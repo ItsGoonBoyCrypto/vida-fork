@@ -42,6 +42,14 @@ class WhaleEvent:
     chart_url: str = ""
 
 
+@dataclass
+class DeployEvent:
+    wallet: str
+    label: str
+    token_address: str
+    tx_hash: str
+
+
 class WalletWatcher:
     def __init__(self, cfg: Config, storage: Storage,
                  session: Optional[aiohttp.ClientSession] = None):
@@ -166,6 +174,59 @@ class WalletWatcher:
                     event.symbol = pair.symbol
                 break
 
+    async def poll_deploys(self) -> list["DeployEvent"]:
+        """NEW token contracts deployed by a LABELLED (curated/alpha) wallet.
+
+        This is the pre-index edge: an alpha deployer launching a token, caught
+        the instant the creation tx lands — before it hits DexScreener or the
+        crowd (the $WALLET / $PLTS pattern). Only labelled wallets are polled
+        (they're the deployers), keeping explorer load bounded."""
+        if not self.enabled() or self._session is None:
+            return []
+        out: list[DeployEvent] = []
+        for wallet in list(self.ww.labels.keys())[: self.ww.max_watched]:
+            seed_key = f"__dseeded__|{wallet}"
+            seeding = self.storage.wallet_event_is_new(seed_key)
+            for tx in await self._creations(wallet):
+                created = (tx.get("contractAddress") or "").lower()
+                txh = (tx.get("hash") or "").strip()
+                if not created or created in ("", "0x") or not txh:
+                    continue
+                key = f"deploy|{wallet}|{txh}"
+                if not self.storage.wallet_event_is_new(key):
+                    continue
+                self.storage.mark_wallet_event(key)
+                if seeding:
+                    continue          # first poll of this wallet: seed, don't alert history
+                out.append(DeployEvent(
+                    wallet=wallet, label=self.ww.labels.get(wallet, _short(wallet)),
+                    token_address=created, tx_hash=txh))
+            if seeding:
+                self.storage.mark_wallet_event(seed_key)
+        return out
+
+    async def _creations(self, wallet: str) -> list[dict]:
+        """Recent normal txs by a wallet that CREATED a contract (txlist)."""
+        params: dict[str, Any] = {
+            "module": "account", "action": "txlist", "address": wallet,
+            "page": 1, "offset": self.ww.max_transfers_per_wallet, "sort": "desc",
+        }
+        if self.cfg.chain.explorer_api_key:
+            params["apikey"] = self.cfg.chain.explorer_api_key
+        try:
+            async with self._session.get(self.cfg.chain.explorer_api_url, params=params) as resp:
+                if resp.status != 200:
+                    return []
+                data = await resp.json()
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            return []
+        result = data.get("result")
+        if not isinstance(result, list):
+            return []
+        # a contract creation has a populated contractAddress (and empty `to`)
+        return [tx for tx in result if (tx.get("contractAddress") or "").strip()
+                and not (tx.get("to") or "").strip()]
+
     async def _transfers(self, wallet: str) -> list[dict]:
         params: dict[str, Any] = {
             "module": "account",
@@ -186,6 +247,18 @@ class WalletWatcher:
             return []
         result = data.get("result")
         return result if isinstance(result, list) else []
+
+
+def format_deploy_html(e: "DeployEvent", explorer: str = "") -> str:
+    from html import escape
+    scan = f"\n🔍 <a href=\"{explorer}/token/{e.token_address}\">Scan</a>" if explorer else ""
+    return "\n".join([
+        f"🧬🚨 <b>ALPHA DEPLOY</b> — {escape(e.label)}",
+        "just deployed a NEW token (pre-index — not on DexScreener yet):",
+        f"<code>{escape(e.token_address)}</code>{scan}",
+        "<i>A tracked deployer launched this. Highest-risk/earliest — DYOR, size "
+        "tiny; the scanner will track its curve from here.</i>",
+    ])
 
 
 def _to_amount(value: Any, decimals: Any) -> Optional[float]:

@@ -2308,6 +2308,22 @@ class Scanner:
             elif ev.side == "sell" and ev.wallet.lower() in smart_set:
                 await self._check_exit(ev)
 
+        # Pre-index alpha trigger: a tracked (labelled) deployer launching a NEW
+        # token — fired the instant the creation tx lands, before DexScreener.
+        if self.cfg.wallet_watch.alpha_deploy_alert and self._wallet_watcher is not None:
+            explorer = (self.cfg.chain.explorer_api_url or "").rstrip("/")
+            if explorer.endswith("/api"):
+                explorer = explorer[:-4]
+            try:
+                from .walletwatch import format_deploy_html
+                for dv in await self._wallet_watcher.poll_deploys():
+                    if self.storage.is_muted(dv.token_address):
+                        continue
+                    await self._send_html(format_deploy_html(dv, explorer=explorer))
+                    log.info("ALPHA DEPLOY %s by %s", dv.token_address, dv.label)
+            except Exception:  # noqa: BLE001
+                log.debug("deploy poll failed", exc_info=True)
+
     async def _check_exit(self, ev) -> None:
         """Alert when a smart wallet sells a token smart money had bought."""
         if not self.cfg.runtime.smart_exit_enabled:

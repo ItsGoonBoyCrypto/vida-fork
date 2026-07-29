@@ -545,6 +545,10 @@ class WalletWatchConfig:
     # wallets our own winner-harvest proved sharp. Capped to bound explorer load.
     watch_smart_set: bool = True
     max_watched: int = 40                             # cap on total wallets polled
+    # Pre-index alpha trigger: alert the instant a LABELLED (curated/alpha)
+    # wallet DEPLOYS a new token — before DexScreener/the crowd. The deployers
+    # in the alpha set are exactly who this catches.
+    alpha_deploy_alert: bool = True
     # Emit individual "🐋 whale bought X" pings. Off => still POLL these wallets
     # and feed their buys into the smart-money cluster signal + gem scoring, just
     # without the per-buy notifications. (Cluster convergence alerts are separate
