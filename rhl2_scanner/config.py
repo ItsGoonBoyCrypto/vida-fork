@@ -490,6 +490,13 @@ class RuntimeConfig:
     db_backup_keep: int = 7
     db_backup_ship_days: float = 7.0
     db_prune_days: int = 30            # forget stale dedup/observation rows older than this
+
+    # --- Weekly tuning review ---
+    # Auto-post a consolidated review (perf hit/rug split + missed winners +
+    # learned conviction weights + a tune hint) to the alert channel every N
+    # hours. The clock is persisted, so a restart doesn't reset the week.
+    weekly_review_enabled: bool = True
+    weekly_review_interval_hours: float = 168.0   # 7 days
     paper_digest_win_multiple: float = 2.0
     # --- Bounded auto-tune of scoring weights ---
     # Once enough alerts have settled, nudge the category weights toward the

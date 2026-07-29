@@ -227,6 +227,7 @@ class Scanner:
                 except Exception:  # never let one cycle kill the loop
                     log.exception("scan cycle failed")
                 await self._maybe_send_digest()
+                await self._maybe_weekly_review()
                 await self._maybe_backup_db()
                 waiter = asyncio.create_task(self._stop.wait())
                 await asyncio.wait([waiter],
@@ -1617,6 +1618,64 @@ class Scanner:
         lines.append("<i>Paper-tracked from real alerts. Past ≠ future; size small.</i>")
         return "\n".join(lines)
 
+    async def _maybe_weekly_review(self) -> None:
+        """Post a consolidated tuning review to the channel every N hours. The
+        last-sent timestamp is persisted so the weekly cadence survives restarts."""
+        rc = self.cfg.runtime
+        if not rc.weekly_review_enabled:
+            return
+        now = time.time()
+        try:
+            last = float(self.storage.kv_get("last_weekly_review_ts") or 0)
+        except (TypeError, ValueError):
+            last = 0.0
+        # Seed the clock on first run so we don't fire immediately on deploy.
+        if last == 0.0:
+            self.storage.kv_set("last_weekly_review_ts", str(now))
+            return
+        if (now - last) < rc.weekly_review_interval_hours * 3600.0:
+            return
+        try:
+            await self._send_html(self._weekly_review())
+            self.storage.kv_set("last_weekly_review_ts", str(now))
+            log.info("weekly review posted")
+        except Exception:  # noqa: BLE001
+            log.exception("weekly review failed")
+
+    def _weekly_review(self) -> str:
+        """Compose the weekly review: perf split + misses + learned weights + hint."""
+        from html import escape as _esc
+        rows = self.storage.all_paper_trades()
+        settled = sum(1 for r in rows if r["settled"])
+        win = self.cfg.runtime.paper_digest_win_multiple or 2.0
+        lines = ["🗓 <b>Weekly review</b> — how the bot is doing + what to tune", ""]
+        # 1) headline performance (reuse the PnL card body sans its own header)
+        card = self._pnl_card().split("\n")
+        lines += [ln for ln in card if not ln.startswith("📊")][:5]
+        # 2) misses
+        ms = self.storage.missed_winner_stats()
+        if ms["count"]:
+            lines.append(f"🕳 Missed winners: <b>{ms['count']}</b> "
+                         f"(biggest {ms['best']:.1f}x) — see /misses")
+        # 3) learned conviction weights (the closed loop)
+        mults = self._conviction_multipliers()
+        if mults:
+            top = sorted(mults.items(), key=lambda kv: -kv[1])
+            shown = " · ".join(f"{_esc(k)} ×{v:.2f}" for k, v in top[:5])
+            lines.append(f"🧠 Learned conviction weights: {shown}")
+        else:
+            lines.append("🧠 Conviction weights: still on hand-values "
+                         f"(learns once ~50+ alerts settle; {settled} so far)")
+        # 4) a concrete tune hint tied to sample size
+        if settled < 50:
+            hint = (f"Only {settled} settled — too few to re-tune. Let it run; "
+                    "the learning kicks in past ~50.")
+        else:
+            hint = ("Enough data to act: check the hit/rug split above and "
+                    "/misses, then nudge min_alert_score / early_launch_min_conviction.")
+        lines += ["", f"<i>{hint}</i>"]
+        return "\n".join(lines)
+
     def _admin_ids(self) -> set:
         """One operator allowlist: telegram admin ids ∪ trader admin ids.
 
@@ -1875,6 +1934,8 @@ class Scanner:
             "<code>/pnl [tp] [sl]</code> — simulated P&amp;L if you traded the alerts "
             "(TP/SL, expectancy, drawdown, by-conviction)",
             "<code>/pnlcard</code> — shareable performance card (hit/rug rate, top movers)",
+            "<code>/review</code> — weekly tuning review (auto-posts every 7d too)",
+            "<code>/misses</code> — winners we discovered but never alerted (tune the gate)",
             "<code>/inspect 0xCA</code> — trace one token through the full pipeline",
             "",
             "<b>Mute a token</b>",
@@ -2058,6 +2119,8 @@ class Scanner:
             await self._send_html(format_pnl_html(p))
         elif cmd in ("pnlcard", "card", "scorecard"):
             await self._send_html(self._pnl_card())
+        elif cmd in ("review", "weekly"):
+            await self._send_html(self._weekly_review())
         elif cmd in ("misses", "missed"):
             from html import escape as _esc
             rows = self.storage.missed_winners(limit=15)
