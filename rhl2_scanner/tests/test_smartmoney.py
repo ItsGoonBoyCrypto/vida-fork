@@ -98,7 +98,8 @@ class TestSmartCommands(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(W1.lower(), sc.storage.smart_wallets())
             self.assertNotIn(W1.lower(), sc.cfg.smart_money_wallets)
             await sc._handle_command("/smart notawallet")  # no crash, no add
-            self.assertEqual(sc.storage.smart_wallets(), [])
+            self.assertNotIn("notawallet", sc.storage.smart_wallets())
+            self.assertNotIn(W1.lower(), sc.storage.smart_wallets())
         finally:
             sc.storage.close()
 

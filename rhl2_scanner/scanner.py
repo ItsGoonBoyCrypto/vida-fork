@@ -155,6 +155,9 @@ class Scanner:
         # Merge any persisted smart-money wallets (from prior /smart or autoseed)
         # into the config set so they take effect this run.
         self._merge_persisted_smart_wallets()
+        # Seed the curated alpha wallets (RH team + protocol devs) — highest-
+        # signal set; their touch on a token is a near-guaranteed mover.
+        self._seed_alpha_wallets()
         # Bounded auto-tune: remember the config weights as the immovable baseline,
         # then apply any persisted tuned override on top (reversible via /autotune).
         self._weights_baseline = {
@@ -3099,6 +3102,41 @@ class Scanner:
             return
         merged = list(dict.fromkeys([w.lower() for w in self.cfg.smart_money_wallets] + persisted))
         self.cfg.smart_money_wallets = merged
+
+    def _seed_alpha_wallets(self) -> None:
+        """Load the curated alpha wallets into the smart set (so their buys drive
+        cluster / core-alpha signals) + the wallet-watch labels (so the feed
+        names them). Idempotent, persisted, extendable via RHL2_ALPHA_WALLETS."""
+        import os
+        from .alpha_wallets import load_alpha_wallets
+        wallets = load_alpha_wallets(os.environ.get("RHL2_ALPHA_WALLETS", ""))
+        if not wallets:
+            return
+        added = 0
+        for addr, label in wallets.items():
+            # label the feed (re-seeded every startup, so labels persist) …
+            self.cfg.wallet_watch.labels[addr] = label
+            if addr not in self.cfg.smart_money_wallets:
+                self.cfg.smart_money_wallets.append(addr)
+            # … and persist to the smart set so it survives restarts + feeds the
+            # cluster / core-alpha signals.
+            try:
+                if self.storage.add_smart_wallet(addr, source="alpha", note=label):
+                    added += 1
+            except Exception:  # noqa: BLE001
+                pass
+        # These are must-track wallets, so turn the feed on by default — but only
+        # when it hasn't been configured already (respect an explicit on/off and
+        # any hand-set wallet list), and never when RHL2_WALLET_WATCH disables it.
+        disabled = os.environ.get("RHL2_WALLET_WATCH", "").lower() in ("0", "false", "off")
+        untouched = not self.cfg.wallet_watch.enabled and not self.cfg.wallet_watch.wallets
+        if untouched and not disabled:
+            self.cfg.wallet_watch.enabled = True
+            self.cfg.wallet_watch.emit_alerts = True
+            self.cfg.wallet_watch.watch_smart_set = True
+        log.info("alpha wallets: %d curated (newly added %d) — tracked + labelled, "
+                 "feed %s", len(wallets), added,
+                 "ON" if self.cfg.wallet_watch.enabled else "off")
 
     def _add_smart_wallet(self, addr: str, source: str = "manual", note: str = "") -> bool:
         """Persist + activate a smart-money wallet. Returns True if newly added."""

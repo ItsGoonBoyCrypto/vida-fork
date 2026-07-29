@@ -55,9 +55,12 @@ class TestManualHarvest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("GEM", html)
             self.assertIn("3", html)                      # buyers added
             self.assertIn("What blocked it", html)        # missed → shows blockers
-            # exemplar persisted + wallets in the smart set
+            # exemplar persisted + the 3 harvested wallets are in the smart set
+            # (alongside the curated alpha seed).
             self.assertTrue(sc.storage.has_manual_winner(_CA))
-            self.assertEqual(len(sc.storage.smart_wallets()), 3)
+            smart = set(sc.storage.smart_wallets())
+            for i in range(3):
+                self.assertIn(f"0x{i:040x}", smart)
             rows = sc.storage.manual_winners()
             self.assertEqual(rows[0]["symbol"], "GEM")
             self.assertEqual(rows[0]["buyers_added"], 3)
