@@ -214,6 +214,10 @@ class Scanner:
         )
         await self._send_startup_message()
         try:
+            await self._harvest_winner_exemplars()
+        except Exception:  # noqa: BLE001
+            log.exception("winner-exemplar harvest failed")
+        try:
             while not self._stop.is_set():
                 try:
                     await self.run_once()
@@ -3167,6 +3171,31 @@ class Scanner:
                                            source_prefix="auto")
         if added:
             log.info("autoseed: harvested %d early buyers of $%s (winner)", added, snap.symbol)
+
+    async def _harvest_winner_exemplars(self) -> None:
+        """Harvest curated winner exemplars (confirmed movers) once on startup —
+        pulls their early buyers into the smart set + credits winner-overlap."""
+        import os
+        from .winner_exemplars import load_winner_exemplars
+        exemplars = load_winner_exemplars(os.environ.get("RHL2_WINNER_EXEMPLARS", ""))
+        if not exemplars or self._session is None:
+            return
+        for token, label in exemplars.items():
+            if not self.storage.pos_event_new("exemplar|" + token):
+                continue                  # already harvested
+            try:
+                added = await self._harvest_buyers(
+                    token, label, source_prefix="exemplar",
+                    mult=self.cfg.runtime.bigmover_harvest_mult)
+                log.info("EXEMPLAR harvest: %s (%s) → +%d early wallets",
+                         token, label, added)
+                from html import escape as _esc
+                await self._send_html(
+                    f"🌟 <b>Winner exemplar harvested</b> — {_esc(label)}\n"
+                    f"<code>{_esc(token)}</code>\nAdded {added} early wallet(s) to "
+                    "the smart set — their next early buy will alert.")
+            except Exception:  # noqa: BLE001
+                log.debug("exemplar harvest failed for %s", token, exc_info=True)
 
     async def _harvest_big_movers(self) -> None:
         """Harvest the early buyers of ANY alert whose tracked peak reached the
