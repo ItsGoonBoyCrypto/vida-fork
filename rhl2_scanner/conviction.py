@@ -34,7 +34,7 @@ class Conviction:
         return " · ".join(f"{lbl} {pts:+.0f}" for lbl, pts in top if pts)
 
 
-def fuse(signals: dict) -> Conviction:
+def fuse(signals: dict, learned: dict = None) -> Conviction:
     """Fuse signal values into a 0-100 conviction + a factor breakdown.
 
     signals keys (all optional; missing = that model didn't weigh in):
@@ -46,7 +46,13 @@ def fuse(signals: dict) -> Conviction:
       smart_quality   0-45 quality-weighted smart-money discovery points
       social          0-100 social sentiment (LunarCrush), or None
       toxic           bool — a repeat-rugger wallet is among the buyers
+
+    ``learned`` is an optional {factor_label: multiplier} map from
+    conviction_learn.learn_multipliers — each confirmation's hand-points are
+    scaled by how much that factor ACTUALLY lifted winner-odds on settled data,
+    so the fusion self-calibrates instead of trusting fixed weights forever.
     """
+    from .conviction_learn import apply_multiplier as _m
     factors: list = []
     # Base: the composite is the anchor (0..50 of the conviction budget).
     composite = float(signals.get("composite") or 0.0)
@@ -57,37 +63,33 @@ def fuse(signals: dict) -> Conviction:
     if signals.get("safety_passed") is False:
         return Conviction(score=min(score, 15.0), factors=factors + [("unsafe", -99)])
 
+    def add(label: str, pts: float) -> None:
+        nonlocal score
+        pts = _m(label, pts, learned)
+        factors.append((label, round(pts, 1)))
+        score += pts
+
     # Independent confirmations — confluence is the whole point.
     sm = signals.get("signature_match")
     if sm is not None and sm >= 0.6:
-        pts = 8.0 + 12.0 * min(1.0, (sm - 0.6) / 0.4)      # up to +20
-        factors.append(("memelab sig", round(pts, 1)))
-        score += pts
+        add("memelab sig", 8.0 + 12.0 * min(1.0, (sm - 0.6) / 0.4))   # up to +20
 
     if signals.get("curve_match"):
-        factors.append(("curve match", 12.0))
-        score += 12.0
+        add("curve match", 12.0)
 
     core = int(signals.get("core_alpha") or 0)
     if core:
-        pts = min(18.0, 12.0 + 6.0 * (core - 1))
-        factors.append(("core-alpha", pts))
-        score += pts
+        add("core-alpha", min(18.0, 12.0 + 6.0 * (core - 1)))
 
     sq = float(signals.get("smart_quality") or 0.0)
     if sq > 0:
-        pts = min(12.0, sq * 0.35)                          # 45 pts → ~16, capped 12
-        factors.append(("smart money", round(pts, 1)))
-        score += pts
+        add("smart money", min(12.0, sq * 0.35))            # 45 pts → ~16, capped 12
 
     social = signals.get("social")
     if social is not None and social >= 60:
-        pts = min(6.0, (social - 60) / 40.0 * 6.0)
-        factors.append(("social", round(pts, 1)))
-        score += pts
+        add("social", min(6.0, (social - 60) / 40.0 * 6.0))
 
     if signals.get("toxic"):
-        factors.append(("toxic buyer", -35.0))
-        score -= 35.0
+        add("toxic buyer", -35.0)
 
     return Conviction(score=max(0.0, min(100.0, score)), factors=factors)

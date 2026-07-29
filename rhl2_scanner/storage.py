@@ -271,6 +271,11 @@ class Storage:
         if "conviction" not in pcols:
             self._conn.execute(
                 "ALTER TABLE paper_trades ADD COLUMN conviction REAL DEFAULT 0")
+        if "conviction_factors_json" not in pcols:
+            # which conviction factors were active at alert time — closed-loop
+            # learning fits their real lift vs outcome from this.
+            self._conn.execute(
+                "ALTER TABLE paper_trades ADD COLUMN conviction_factors_json TEXT DEFAULT '[]'")
 
     def close(self) -> None:
         self._conn.close()
@@ -387,12 +392,16 @@ class Storage:
             return None
         now = time.time()
         breakdown = {c.name: round(c.raw, 1) for c in result.categories}
+        # Conviction factor LABELS active at alert time (drop the 'base' anchor)
+        # — closed-loop learning fits their lift vs the token's outcome.
+        conv_labels = [lbl for lbl, pts in (getattr(snap, "conviction_factors", None) or [])
+                       if lbl != "base" and pts]
         cur = self._conn.execute(
             """INSERT INTO paper_trades
                (pair_address, token_address, symbol, chain, entry_ts, entry_price,
                 entry_mcap, entry_liq, score, level, safety_passed, breakdown_json,
-                last_price, last_checked_ts, conviction)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                last_price, last_checked_ts, conviction, conviction_factors_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 snap.pair_address.lower(),
                 snap.token_address.lower(),
@@ -409,6 +418,7 @@ class Storage:
                 snap.price_usd,
                 now,
                 round(float(conviction or 0.0), 1),
+                json.dumps(conv_labels),
             ),
         )
         self._conn.commit()
@@ -440,6 +450,21 @@ class Storage:
     def all_paper_trades(self) -> list[sqlite3.Row]:
         cur = self._conn.execute("SELECT * FROM paper_trades ORDER BY entry_ts")
         return cur.fetchall()
+
+    def conviction_outcomes(self) -> list:
+        """(factor_labels, max_mult, settled) per tracked alert — feeds the
+        closed-loop conviction learner."""
+        import json as _json
+        rows = self._conn.execute(
+            "SELECT conviction_factors_json, max_mult, settled FROM paper_trades").fetchall()
+        out = []
+        for r in rows:
+            try:
+                labels = _json.loads(r["conviction_factors_json"] or "[]")
+            except (ValueError, TypeError):
+                labels = []
+            out.append((labels, r["max_mult"] or 1.0, bool(r["settled"])))
+        return out
 
     def paper_trades_over_mult(self, mult: float) -> list[sqlite3.Row]:
         """Tracked alerts whose peak reached >= mult — the confirmed big movers,

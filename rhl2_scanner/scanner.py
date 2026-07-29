@@ -182,6 +182,9 @@ class Scanner:
             self._trader = None
         # Tokens with a buy currently executing (double-tap guard).
         self._buys_inflight: set = set()
+        # Learned conviction factor multipliers (refreshed hourly from outcomes).
+        self._conv_mults: dict = {}
+        self._conv_mults_ts: float = 0.0
 
     # -- lifecycle -------------------------------------------------------
 
@@ -2832,7 +2835,26 @@ class Scanner:
             "smart_quality": snap.smart_money_quality_bonus or 0.0,
             "social": None,
             "toxic": snap.toxic_buyer,
-        })
+        }, learned=self._conviction_multipliers())
+
+    def _conviction_multipliers(self) -> dict:
+        """Learned per-factor multipliers from settled outcomes, refreshed hourly
+        and cached. Empty until enough alerts settle (then hand-weights stand)."""
+        import time as _t
+        now = _t.time()
+        if self._conv_mults_ts and now - self._conv_mults_ts < 3600:
+            return self._conv_mults
+        try:
+            from .conviction_learn import learn_multipliers
+            rows = self.storage.conviction_outcomes()
+            self._conv_mults = learn_multipliers(
+                rows, win_multiple=self.cfg.runtime.paper_digest_win_multiple)
+        except Exception:  # noqa: BLE001
+            self._conv_mults = {}
+        self._conv_mults_ts = now
+        if self._conv_mults:
+            log.info("conviction weights (learned): %s", self._conv_mults)
+        return self._conv_mults
 
     async def _attach_alert_intel(self, snap: TokenSnapshot, result: ScoreResult) -> None:
         """Compute every signal into ONE alert: conviction, exit plan, KOL among
