@@ -141,10 +141,18 @@ chain:
 # hype. Only reshapes the maturity/watch tier; the 🌱 early-launch path (the top
 # performer) is score-independent and unaffected. Revisit at ~50 settled alerts.
 weights:
-  safety: 0.40         # was 0.38
-  distribution: 0.24   # was 0.20 — the 45-59 winners lean on clean distribution
-  momentum: 0.21       # was 0.25 — momentum spikes were a rug tell
-  discovery: 0.15      # was 0.17 — hype/boost/socials correlated with rugs
+  # Rebalanced off 1,132 settled alerts (/perf). The by-signal split showed
+  # momentum & discovery are INVERTED — high scores rug MORE and win LESS:
+  #   momentum  hi: 10% hit / 59% rug   vs  lo: 26% hit / 36% rug
+  #   discovery hi:  8% hit / 73% rug   vs  lo: 15% hit / 47% rug
+  #   safety    hi: 46% rug (vs 60% lo) · distribution hi: 14% hit (vs 10% lo)
+  # So: gut momentum + discovery, lean hard on safety + clean distribution. The
+  # LEARNED signals (smart-money / alpha wallets / winner-signature) ride in via
+  # conviction, which now gates the alert — that's where the real edge is.
+  safety: 0.44         # ↑ high-safety rugs less
+  distribution: 0.34   # ↑ clean distribution is the strongest surviving edge
+  momentum: 0.12       # ↓↓ high momentum = pump-and-dump tell (was 0.21)
+  discovery: 0.10      # ↓↓ high hype/boosts = rug magnet (was 0.15)
 
 active_tier: momentum
 
