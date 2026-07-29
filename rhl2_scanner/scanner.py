@@ -2058,6 +2058,22 @@ class Scanner:
             await self._send_html(format_pnl_html(p))
         elif cmd in ("pnlcard", "card", "scorecard"):
             await self._send_html(self._pnl_card())
+        elif cmd in ("misses", "missed"):
+            from html import escape as _esc
+            rows = self.storage.missed_winners(limit=15)
+            stats = self.storage.missed_winner_stats()
+            if not rows:
+                await self._send_html("🕳 No missed winners logged yet — a miss is a "
+                                      "≥win_mult token we discovered but never alerted.")
+                return
+            lines = [f"🕳 <b>Missed winners</b> — {stats['count']} total, "
+                     f"biggest {stats['best']:.1f}x. These slipped the gate/score:"]
+            for r in rows:
+                lines.append(f"${_esc(r['symbol'])} <b>{r['peak']:.1f}x</b> · "
+                             f"<code>{_esc(r['token'])}</code>")
+            lines.append("\n<i>Tune the floors/weights so these would pass; their "
+                         "early buyers are already harvested into the smart set.</i>")
+            await self._send_html("\n".join(lines))
         elif cmd in ("autotune", "weights"):
             from html import escape as _esc
             from . import autotune as _at
@@ -3612,6 +3628,19 @@ class Scanner:
                 winners += 1
                 log.info("winner-harvest: $%s ran %.1fx — harvested %d early buyers",
                          row["symbol"], mult, added)
+                # Post-mortem: a winner we DISCOVERED but never alerted is a miss.
+                # Record it (miss rate + how big we let slip) so we can tune the
+                # gate/score that blocked it — and ping the operator on a big one.
+                if self.storage.alert_rank(pair or "") < 0:
+                    reason = "discovered but never alerted (gate/score too tight)"
+                    self.storage.record_missed_winner(token, row["symbol"] or "?", mult, reason)
+                    if mult >= rc.bigmover_harvest_mult:
+                        from html import escape as _esc
+                        await self._send_html(
+                            f"🕳 <b>Missed winner</b> — ${_esc(row['symbol'] or '?')} "
+                            f"ran <b>{mult:.1f}x</b> but we never alerted it.\n"
+                            f"<code>{_esc(token)}</code>\n{reason}. Its early buyers "
+                            "were harvested; review with /misses.")
         if winners:
             log.info("winner-harvest swept %d candidates, %d winners", len(due), winners)
         # Keep the curve-observation table bounded.

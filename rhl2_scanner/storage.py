@@ -214,6 +214,17 @@ CREATE TABLE IF NOT EXISTS honeypot_deployers (
     ts         REAL NOT NULL
 );
 
+-- Missed winners: tokens that ran >= win_mult which we DISCOVERED but never
+-- alerted — the post-mortem feed. Turns every miss into a tunable signal
+-- (miss rate + which gate/score band let them slip).
+CREATE TABLE IF NOT EXISTS missed_winners (
+    token   TEXT PRIMARY KEY,
+    symbol  TEXT,
+    peak    REAL,
+    reason  TEXT,
+    ts      REAL NOT NULL
+);
+
 -- Trader daily spend ledger (native units per chain per UTC day). The daily-cap
 -- rail reads this — an in-memory tally would silently reset on every redeploy.
 CREATE TABLE IF NOT EXISTS trade_spends (
@@ -450,6 +461,27 @@ class Storage:
     def all_paper_trades(self) -> list[sqlite3.Row]:
         cur = self._conn.execute("SELECT * FROM paper_trades ORDER BY entry_ts")
         return cur.fetchall()
+
+    def record_missed_winner(self, token: str, symbol: str, peak: float,
+                             reason: str) -> None:
+        """Log a ≥win_mult token we discovered but never alerted (post-mortem)."""
+        self._conn.execute(
+            "INSERT OR REPLACE INTO missed_winners (token, symbol, peak, reason, ts) "
+            "VALUES (?,?,?,?,?)",
+            (token.lower(), symbol or "?", round(float(peak or 0.0), 2), reason, time.time()))
+        self._conn.commit()
+
+    def missed_winners(self, limit: int = 20) -> list:
+        rows = self._conn.execute(
+            "SELECT token, symbol, peak, reason FROM missed_winners "
+            "ORDER BY peak DESC LIMIT ?", (limit,)).fetchall()
+        return [{"token": r["token"], "symbol": r["symbol"], "peak": r["peak"],
+                 "reason": r["reason"]} for r in rows]
+
+    def missed_winner_stats(self) -> dict:
+        row = self._conn.execute(
+            "SELECT COUNT(*) n, MAX(peak) best FROM missed_winners").fetchone()
+        return {"count": row["n"] or 0, "best": row["best"] or 0.0}
 
     def conviction_outcomes(self) -> list:
         """(factor_labels, max_mult, settled) per tracked alert — feeds the
