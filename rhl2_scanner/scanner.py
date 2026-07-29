@@ -717,6 +717,57 @@ class Scanner:
             params = {"filter": "to", **nxt}
         return funder
 
+    async def _wallet_first_ts(self, address: str) -> float:
+        """Earliest tx timestamp of a wallet (its 'birth'), 0 if unresolved.
+        Blockscout v2 ascending — one page of the oldest txs."""
+        base = (self.cfg.chain.explorer_api_url or "").rstrip("/")
+        base = base + "/v2" if base.endswith("/api") else base
+        if not base or self._session is None or not address:
+            return 0.0
+        try:
+            async with self._session.get(
+                    f"{base}/addresses/{address}/transactions",
+                    params={"filter": "from"}) as r:
+                data = await r.json() if r.status == 200 else None
+        except Exception:  # noqa: BLE001
+            return 0.0
+        items = (data or {}).get("items") if isinstance(data, dict) else None
+        if not items:
+            return 0.0
+        import datetime
+        best = 0.0
+        for tx in items:
+            ts = tx.get("timestamp") or tx.get("block_timestamp")
+            if not ts:
+                continue
+            try:
+                dt = datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                epoch = dt.timestamp()
+            except (ValueError, TypeError):
+                continue
+            if best == 0.0 or epoch < best:
+                best = epoch
+        return best
+
+    async def _fresh_buyer_signal(self, token: str) -> tuple[float, str]:
+        """Resolve the ages of a token's earliest buyers → (conviction_delta, note).
+        Heavily-fresh early buyers = bot/sniper launch (demote)."""
+        if self._session is None:
+            return 0.0, ""
+        try:
+            from .wallet_age import age_verdict, fresh_buyer_ratio
+            smart = SmartMoneyClient(self.cfg, session=self._session)
+            buyers = await smart.early_buyers(token, 6)
+            first_seen = {}
+            for w in buyers[:6]:
+                ts = await self._wallet_first_ts(w)
+                if ts:
+                    first_seen[w] = ts
+            return age_verdict(fresh_buyer_ratio(first_seen, time.time()))
+        except Exception:  # noqa: BLE001
+            log.debug("fresh-buyer signal failed", exc_info=True)
+            return 0.0, ""
+
     async def _trace_scam_funder(self, deployer: str, token: str) -> int:
         """Resolve a scam deployer's funder and blocklist it. Returns its count
         (0 if unresolved or excluded as a CEX/bridge/launchpad wallet)."""
@@ -2879,6 +2930,20 @@ class Scanner:
         conv = self._compute_conviction(snap, result)
         snap.conviction = conv.score
         snap.conviction_factors = conv.factors
+
+        # First-buyer wallet-age: demote bot/sniper launches (early buyers are
+        # all brand-new wallets), lightly boost organic ones (aged hands early).
+        if self.cfg.runtime.fresh_buyer_check:
+            try:
+                delta, note = await self._fresh_buyer_signal(snap.token_address)
+                if delta:
+                    snap.conviction = max(0.0, min(100.0, snap.conviction + delta))
+                    snap.conviction_factors = list(snap.conviction_factors) + [
+                        ("buyer age", round(delta, 1))]
+                if note:
+                    snap.fresh_buyer_note = note
+            except Exception:  # noqa: BLE001
+                log.debug("fresh-buyer check failed", exc_info=True)
 
         # Exit plan from the learned top-zone model + the configured stop.
         model = self._exit_model() if self.cfg.runtime.exit_intel_enabled else None

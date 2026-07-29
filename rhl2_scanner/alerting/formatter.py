@@ -188,6 +188,10 @@ def _dev_line(snap: TokenSnapshot) -> str:
     return f"🏭 Dev: {escape(snap.dev_note)}" if snap.dev_note else ""
 
 
+def _buyer_age_line(snap: TokenSnapshot) -> str:
+    return escape(snap.fresh_buyer_note) if getattr(snap, "fresh_buyer_note", "") else ""
+
+
 def _honeypot_line(snap: TokenSnapshot) -> str:
     """Explicit sellability read — the honeypot/sell-tax status, front and centre."""
     s = snap.safety
@@ -328,6 +332,9 @@ def format_early_launch_html(snap: TokenSnapshot, result: ScoreResult) -> str:
     dev = _dev_line(snap)
     if dev:
         lines.append(dev)
+    ba = _buyer_age_line(snap)
+    if ba:
+        lines.append(ba)
     exit_plan = _exit_line(snap)
     if exit_plan:
         lines.append(exit_plan)

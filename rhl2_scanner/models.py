@@ -136,6 +136,7 @@ class TokenSnapshot:
     exit_target: str = ""           # learned take-profit hint, e.g. "~4x–7x"
     kol_labels: list = field(default_factory=list)           # KOL names among buyers
     dev_note: str = ""              # deployer track record (prior winners/rugs/honeypots)
+    fresh_buyer_note: str = ""      # first-buyer wallet-age read (bot-launch vs real hands)
     funder_blocked: bool = False    # deployer funded by a repeat scam funder -> veto alert
     dev_blocked: bool = False       # deployer is a serial rugger -> veto alert
     launchpad: str = ""             # origin launchpad name if known (e.g. "flap")

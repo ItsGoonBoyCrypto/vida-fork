@@ -379,6 +379,11 @@ class RuntimeConfig:
     bigmover_harvest_enabled: bool = True
     bigmover_harvest_mult: float = 10.0
 
+    # First-buyer wallet-age check: at alert time, resolve the ages of a token's
+    # earliest buyers. All-fresh wallets = a bot/sniper bundle (demote); aged
+    # wallets early = real hands (boost). A few explorer calls per alert.
+    fresh_buyer_check: bool = True
+
     # --- Smart-money CLUSTER alert ---
     # When this many DISTINCT smart-money wallets buy the same token within the
     # window, fire a high-priority "cluster" alert — convergence of proven early
