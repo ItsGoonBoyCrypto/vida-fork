@@ -388,6 +388,34 @@ class Store:
             "SELECT wallet FROM smart_wallets WHERE chain = ?", (chain.value,))
         return {r["wallet"] for r in cur.fetchall()}
 
+    def smart_wallets_effective(self, chain: Chain) -> set:
+        """Smart wallets that count for `chain` — cross-chain identity: an EVM
+        address proven smart on ANY EVM chain (Base/ETH/BNB/RH) is the SAME
+        wallet everywhere, so its reputation carries. Solana is its own space."""
+        if not chain.is_evm:
+            return self.smart_wallets(chain)
+        evm = [c.value for c in Chain if c.is_evm]
+        qs = ",".join("?" for _ in evm)
+        cur = self._conn.execute(
+            f"SELECT DISTINCT wallet FROM smart_wallets WHERE chain IN ({qs})", evm)
+        return {r["wallet"] for r in cur.fetchall()}
+
+    def wallet_winner_overlap_cross(self, chain: Chain, wallet: str) -> int:
+        """Distinct winners a wallet was early on, POOLED across EVM chains for an
+        EVM address (cross-chain reputation). Solana counted alone."""
+        w = wallet.lower()
+        if not chain.is_evm:
+            row = self._conn.execute(
+                "SELECT COUNT(DISTINCT token) n FROM wallet_winners WHERE chain = ? AND wallet = ?",
+                (chain.value, w)).fetchone()
+            return row["n"] if row else 0
+        evm = [c.value for c in Chain if c.is_evm]
+        qs = ",".join("?" for _ in evm)
+        row = self._conn.execute(
+            f"SELECT COUNT(DISTINCT chain || ':' || token) n FROM wallet_winners "
+            f"WHERE wallet = ? AND chain IN ({qs})", [w, *evm]).fetchone()
+        return row["n"] if row else 0
+
     def smart_wallet_count(self, chain: Optional[Chain] = None) -> int:
         if chain:
             return self._conn.execute(

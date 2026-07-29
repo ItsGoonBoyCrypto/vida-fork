@@ -109,7 +109,9 @@ class SmartMoney:
     async def annotate(self, snap: TokenSnapshot) -> None:
         """Set snap.smart_money_wallets = smart wallets among this token's buyers,
         plus snap.smart_money_quality = the summed reputation of those wallets."""
-        smart = self.store.smart_wallets(snap.chain)
+        # Cross-chain identity: an EVM address smart on Base/ETH/BNB is the same
+        # wallet on RH, so pool the smart set across EVM chains.
+        smart = self.store.smart_wallets_effective(snap.chain)
         if not smart:
             return
         buyers = await self._buyers(snap.chain, snap.token_address)
