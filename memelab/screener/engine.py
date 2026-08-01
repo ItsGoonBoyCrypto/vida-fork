@@ -27,6 +27,11 @@ from ..models import (
 # fraction of the total rule-weight to be evaluable, so a token with one lucky
 # data point can't fluke a high score.
 _COVERAGE_FLOOR = 0.35
+# Coverage at/above which a token earns FULL confidence. Below it, the score is
+# scaled down: matching your few measurable rules is not a 100/100 — a confident
+# score needs most of the signature to actually be evaluable (real data, not one
+# lucky feature). This is what stops the flood of thin-data 100s.
+_CONF_TARGET = 0.65
 
 
 def _rule_holds(rule: dict, fv: FeatureVector) -> bool:
@@ -61,7 +66,19 @@ def score_vector(fv: FeatureVector, sig: Signature):
     model_score = model_probability(fv, sig) if sig.model.get("weights") else None
 
     parts = [s for s in (rule_score, model_score) if s is not None]
-    score01 = sum(parts) / len(parts) if parts else 0.0
+    raw01 = sum(parts) / len(parts) if parts else 0.0
+
+    # Confidence scaling: a token that matched its few MEASURABLE rules is not a
+    # 100 — weight the score by how much of the signature we could actually
+    # evaluate. Below the coverage floor there's too little data to score at all.
+    if total_w:
+        if covered < _COVERAGE_FLOOR:
+            confidence = 0.0
+        else:
+            confidence = min(1.0, covered / _CONF_TARGET)
+    else:
+        confidence = 1.0                       # pure-model signature (no rules)
+    score01 = raw01 * confidence
     return round(score01 * 100, 1), matched, reasons
 
 

@@ -18,9 +18,11 @@ class TestCoverageScoring(unittest.TestCase):
     def setUp(self):
         self.sig = default_signature([Chain.SOLANA])
 
-    def test_static_token_scores_high_over_evaluable(self):
+    def test_static_token_scores_moderate_not_certain(self):
         # A fresh token: only the static rules are measurable (no velocity yet).
-        # It matches the ones it CAN, so it should score well over 65, not cap ~41.
+        # It matches the ones it CAN, so it's PROMISING (well above the old ~40
+        # all-rules cap) but NOT a confident 100 — confidence scaling reserves the
+        # top scores for tokens with real coverage (time-series confirmation).
         feats = {
             "buy_ratio_5m": 0.7,        # ≥0.62 ✓
             "smart_money_count": 0,     # <1 ✗ (real miss — always present)
@@ -31,17 +33,26 @@ class TestCoverageScoring(unittest.TestCase):
             # velocity/social features absent → skipped, NOT penalised
         }
         score, matched, _ = score_vector(_fv(feats), self.sig)
-        self.assertGreater(score, 65)                  # clears the alert floor now
+        self.assertGreater(score, 45)                  # well above the old ~40 cap
+        self.assertLess(score, 80)                     # but NOT an inflated 100
         self.assertNotIn("holder_velocity", matched)   # absent → never counted
 
-    def test_old_behaviour_would_have_capped_low(self):
-        # Same token under the OLD all-rules denominator would be ~3.6/9.0 ≈ 40.
-        # The new evaluable denominator (~4.6) with 3.6 hits ≈ 78. Assert it's the
-        # evaluable ratio, not the total-weight ratio.
+    def test_evaluable_ratio_beats_total_weight_ratio(self):
+        # Under the OLD all-rules denominator this token was ~40. The evaluable
+        # denominator (fresh tokens not penalised for missing time-series) keeps
+        # it clearly higher, even after confidence scaling.
         feats = {"buy_ratio_5m": 0.7, "smart_money_count": 0, "liq_to_mcap": 0.1,
                  "top10_pct": 30, "dev_holdings_pct": 5, "is_sellable": 1}
         score, _, _ = score_vector(_fv(feats), self.sig)
-        self.assertGreater(score, 70)                  # was ~40 before
+        self.assertGreater(score, 45)                  # > the old ~40 total-weight ratio
+
+    def test_thin_all_match_is_not_a_perfect_score(self):
+        # The reported bug: a token matching its FEW measurable rules used to hit
+        # ~100. Confidence scaling caps it — a near-full match on partial coverage
+        # is not certainty.
+        feats = {"buy_ratio_5m": 0.9, "liq_to_mcap": 0.2, "is_sellable": 1}
+        score, _, _ = score_vector(_fv(feats), self.sig)
+        self.assertLess(score, 75)                     # no more flood of 100/100s
 
     def test_thin_data_guarded_by_coverage_floor(self):
         # Only two low-coverage features present → below the coverage floor → 0,
