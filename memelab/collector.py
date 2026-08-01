@@ -49,7 +49,10 @@ class CollectorConfig:
     # scanner owns robinhood, so memelab alerts only on the other chains — one
     # unified feed, no double alerts. memelab still COLLECTS every chain to learn.
     alert_chains: list = field(default_factory=list)
-    min_alert_score: float = 65.0      # floor; screener also gates on signature precision
+    # Alert floor. Bumped 65 -> 72 after the confidence-scaling change: fewer,
+    # higher-conviction memelab alerts (a promising-but-thin token ~60 no longer
+    # clears it). Override per deploy with MEMELAB_MIN_ALERT_SCORE.
+    min_alert_score: float = 72.0      # floor; screener also gates on signature precision
     backtest_interval_min: float = 360.0  # re-derive the signature every 6h
     # Ops
     heartbeat_interval_min: float = 720.0   # 12h "alive + stats" digest
