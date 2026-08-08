@@ -1,4 +1,12 @@
-# Vida — give your AI agent a life on Kaspa
+# Dagger Ai Integration 🗡️ — give your AI agent a life on Kaspa
+
+AI agents using [Dagger](https://dagger.io) fully: the Vida agent wallet
+exposed as sandboxed, LLM-bindable Dagger functions. Built on the Vida
+wallet core (below); the Dagger/agent layer lives in `dagger/`,
+`vida/agent_api.py`, `vida/agent_tools.py`, and `scripts/agent_cli.py` —
+start with [docs/DAGGER_INTEGRATION.md](docs/DAGGER_INTEGRATION.md).
+
+---
 
 **Vida** (Spanish for *life*) is a free, open-source wallet that lets an AI agent — Hermes or any local agent — **receive, hold, and send real KAS** without ever owning your money.
 
