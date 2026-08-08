@@ -104,25 +104,33 @@ python tests/qa_secure_tests.py   # encryption + sessions: 11 tests
 python tests/qa_agent_tests.py    # agent tool surface: 26 checks (no network needed)
 ```
 
-## For AI agents
+## For AI agents — Dagger 🗡️ integration
 
-Vida now ships a first-class agent package: a session-only wallet API
-(`vida/agent_api.py` — no password parameter, by design), a framework-agnostic
-LLM tool manifest (`vida/agent_tools.py`, Anthropic/MCP-shaped), and a
-JSON-in/JSON-out CLI (`scripts/agent_cli.py`) so any orchestrator can drive the
-wallet from a subprocess. Session limits are enforced at the agent boundary and
-every tool result is scrubbed of secret-like fields before it can reach an LLM.
+Vida ships a first-class agent package so AI agents can use the wallet — and
+[Dagger](https://dagger.io) — fully:
+
+- **Session-only wallet API** (`vida/agent_api.py` — no password parameter, by
+  design) with session limits enforced at the agent boundary and every tool
+  result scrubbed of secret-like fields before it can reach an LLM.
+- **Framework-agnostic tool manifest** (`vida/agent_tools.py`,
+  Anthropic/MCP-shaped) and a **JSON-in/JSON-out CLI** (`scripts/agent_cli.py`).
+- **Dagger module** (`dagger/`) that runs every wallet call in a sandboxed
+  container — session file passed as a Dagger Secret, seed/password never enter
+  the sandbox — and binds the wallet into Dagger's LLM environment so any
+  Dagger-speaking agent can discover and call the tools autonomously.
 
 ```bash
+# plain subprocess (no Dagger needed)
 python scripts/agent_cli.py --list-tools
-python scripts/agent_cli.py --wallet vida_secure.json --session agent_session.json vida_balance
+
+# sandboxed via Dagger
+dagger develop -m dagger
+dagger call -m dagger balance --wallet=./vida_secure.json --session=file:./agent_session.json
+dagger call -m dagger demo --wallet=./vida_secure.json --session=file:./agent_session.json \
+    --prompt="Check the balance and report it"
 ```
 
-A [Dagger](https://dagger.io) 🗡️ module that runs each call in a sandboxed
-container is designed on top of this same surface — see
-[docs/DAGGER_INTEGRATION.md](docs/DAGGER_INTEGRATION.md). The module code lands
-in a follow-up once it is verified against a live engine, so no unverified
-build or security surface ships today.
+Design, security model, and status: [docs/DAGGER_INTEGRATION.md](docs/DAGGER_INTEGRATION.md)
 
 ## Architecture
 
@@ -137,7 +145,8 @@ vida/
 scripts/
   setup_owner_wallet.py  # owner-run: creates wallet, shows seed once
   grant_session.py       # owner-run: grants/revokes agent sessions
-  agent_cli.py           # JSON-in/JSON-out tool dispatcher for orchestrators
+  agent_cli.py           # JSON-in/JSON-out tool dispatcher (used by Dagger)
+dagger/                  # Dagger 🗡️ module: sandboxed, LLM-bindable functions
 tests/                   # automated tests (core, secure, agent)
 ```
 
@@ -147,7 +156,8 @@ tests/                   # automated tests (core, secure, agent)
 - [x] Real transactions on Kaspa mainnet (see receipts above)
 - [x] Owner-custody seed + password encryption + agent sessions
 - [x] Agent tool surface (manifest + CLI) — framed, tested
-- [ ] Dagger 🗡️ module — designed ([docs/DAGGER_INTEGRATION.md](docs/DAGGER_INTEGRATION.md)); code lands after live-engine verification
+- [x] Dagger 🗡️ module — sandboxed functions + LLM env binding (`dagger/`)
+- [ ] Verify the Dagger module against a live engine + publish to the Daggerverse
 - [ ] Covenant module (blocked on Kaspa consensus support — tracking [rusty-kaspa #1073](https://github.com/kaspanet/rusty-kaspa/issues/1073))
 - [ ] TAO (Bittensor) module
 - [ ] Bitcoin module

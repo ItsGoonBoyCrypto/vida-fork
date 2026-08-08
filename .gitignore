@@ -34,3 +34,6 @@ venv/
 
 # OS
 .DS_Store
+
+# Dagger module config is source, not key material
+!dagger/dagger.json

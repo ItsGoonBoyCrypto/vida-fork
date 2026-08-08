@@ -1,12 +1,13 @@
 # Vida × Dagger 🗡️ — agent integration design
 
-**Status: agent layer shipped, Dagger module designed.** The agent package
-(`vida/agent_api.py`, `vida/agent_tools.py`, `scripts/agent_cli.py`) is in the
-repo and unit-tested. The Dagger module itself is intentionally NOT in the tree
-yet: it ships in a follow-up PR only after being generated with
-`dagger develop` and verified against a live engine, so no unverified build
-config or security-sensitive scaffolding sits in the repo in the meantime.
-This document is the design it will be built to.
+**Status: shipped.** The agent package (`vida/agent_api.py`,
+`vida/agent_tools.py`, `scripts/agent_cli.py`) is in the repo and unit-tested,
+and the Dagger module (`dagger/`) ships the full intended surface: sandboxed
+wallet functions, a generic tool dispatcher, and an LLM environment binding so
+Dagger-speaking agents can use the wallet autonomously. Remaining before
+Daggerverse publication: run `dagger develop -m dagger` and exercise the module
+against a live 0.18 engine (needs the Dagger CLI + engine, not available in
+this repo's test environment).
 
 ## Why Dagger
 
@@ -30,9 +31,9 @@ Dagger is the natural runtime for the agent side of that bargain:
 LLM / agent framework (Hermes, Claude, anything Dagger-speaking)
         │  discovers + calls functions
         ▼
-dagger/  (planned, follow-up PR)  Dagger module "vida-agent"
-                                  base / list-tools / tool / describe /
-        │                         balance / send / agent-env / demo
+dagger/                         Dagger module "vida-agent"
+  src/vida_agent/main.py          base / sandbox / list-tools / tool /
+        │                         describe / balance / send / agent-env / demo
         │  execs in sandbox container
         ▼
 scripts/agent_cli.py            uniform subprocess surface (JSON in/out)
@@ -79,23 +80,20 @@ the covenant module.
 - `vida_send` — policy-gated send; returns txid + explorer URL
 - `vida_sign_message` — Schnorr proof of address control
 
-## Quickstart (today — agent layer, no Dagger required)
+## Quickstart
 
 ```bash
 # owner machine: create wallet + grant a session as usual
 python scripts/setup_owner_wallet.py
 python scripts/grant_session.py            # e.g. 24h, 5 KAS/tx, 20 KAS/day
 
-# any orchestrator can now drive the wallet over the CLI:
+# option A — plain subprocess, no Dagger required:
 python scripts/agent_cli.py --list-tools
 python scripts/agent_cli.py --wallet vida_secure.json --session agent_session.json \
     vida_send --args '{"to_address": "kaspa:qq...", "amount_kas": 1.5}'
-```
 
-## Quickstart (once the Dagger module lands)
-
-```bash
-dagger develop -m dagger
+# option B — sandboxed via Dagger (>= 0.18):
+dagger develop -m dagger                   # generate client bindings (once)
 dagger call -m dagger list-tools
 dagger call -m dagger balance \
     --wallet=./vida_secure.json --session=file:./agent_session.json
@@ -104,15 +102,21 @@ dagger call -m dagger demo \
     --prompt="Check the balance and report it"
 ```
 
+For agent frameworks: `agent-env` returns a `dagger.Env` with the wallet
+sandbox bound as a typed input, so `dag.llm().with_env(...)` gives the model
+the sandbox as tools — it can discover the manifest and call any wallet tool
+inside session limits, and nothing else.
+
 ## Roadmap
 
 - [x] `vida/agent_api.py` — session-only AgentWallet with policy gate + redaction
 - [x] `vida/agent_tools.py` — framework-agnostic tool manifest + dispatcher
 - [x] `scripts/agent_cli.py` — JSON-in/JSON-out subprocess surface
 - [x] `tests/qa_agent_tests.py` — manifest, dispatch, and redaction tests
-- [ ] `dagger/` module (follow-up PR): generate with `dagger develop`, verify
-      against a live 0.18 engine, then commit — base container, tool
-      dispatcher, convenience functions, `agent_env` LLM binding
+- [x] `dagger/` module — base + sandbox containers, tool dispatcher,
+      convenience functions, `agent_env` LLM binding, `demo`
+- [ ] Run `dagger develop` + exercise against a live 0.18 engine (needs the
+      Dagger CLI/engine; not available in this repo's test environment)
 - [ ] Persist the daily-spend ledger across restarts (TODO in `agent_api.py`)
 - [ ] Publish the module to the Daggerverse so agents can `dagger install` it
 - [ ] MCP server wrapper over the same manifest (free once this lands)

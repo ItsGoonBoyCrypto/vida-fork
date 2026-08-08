@@ -19,8 +19,8 @@ This module frames the boundary between "the wallet" and "the agent":
 Runtime-agnostic by design: the same AgentWallet drives
   - direct in-process use (Hermes or any local agent),
   - scripts/agent_cli.py (uniform subprocess surface),
-  - the planned Dagger 🗡️ module (containerized, LLM-bindable — see
-    docs/DAGGER_INTEGRATION.md; lands after live-engine verification).
+  - the Dagger 🗡️ module in dagger/ (containerized, cache-friendly,
+    LLM-bindable — see docs/DAGGER_INTEGRATION.md).
 
 Imports of the kaspa SDK are deferred to construction time so this module —
 and the tool manifest in agent_tools.py — can be imported and inspected on
