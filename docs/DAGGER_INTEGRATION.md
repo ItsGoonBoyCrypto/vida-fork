@@ -1,9 +1,12 @@
 # Vida × Dagger 🗡️ — agent integration design
 
-**Status: framed.** The package structure, security boundary, and tool surface
-below are in the repo and unit-tested where no network/SDK is needed. The
-Dagger module is scaffolding awaiting `dagger develop` + engine verification.
-TODOs are marked inline in the code.
+**Status: agent layer shipped, Dagger module designed.** The agent package
+(`vida/agent_api.py`, `vida/agent_tools.py`, `scripts/agent_cli.py`) is in the
+repo and unit-tested. The Dagger module itself is intentionally NOT in the tree
+yet: it ships in a follow-up PR only after being generated with
+`dagger develop` and verified against a live engine, so no unverified build
+config or security-sensitive scaffolding sits in the repo in the meantime.
+This document is the design it will be built to.
 
 ## Why Dagger
 
@@ -27,8 +30,8 @@ Dagger is the natural runtime for the agent side of that bargain:
 LLM / agent framework (Hermes, Claude, anything Dagger-speaking)
         │  discovers + calls functions
         ▼
-dagger/                         Dagger module "vida-agent"
-  src/vida_agent/main.py          base / list-tools / tool / describe /
+dagger/  (planned, follow-up PR)  Dagger module "vida-agent"
+                                  base / list-tools / tool / describe /
         │                         balance / send / agent-env / demo
         │  execs in sandbox container
         ▼
@@ -76,14 +79,22 @@ the covenant module.
 - `vida_send` — policy-gated send; returns txid + explorer URL
 - `vida_sign_message` — Schnorr proof of address control
 
-## Quickstart
+## Quickstart (today — agent layer, no Dagger required)
 
 ```bash
 # owner machine: create wallet + grant a session as usual
 python scripts/setup_owner_wallet.py
 python scripts/grant_session.py            # e.g. 24h, 5 KAS/tx, 20 KAS/day
 
-# anywhere with Dagger >= 0.18:
+# any orchestrator can now drive the wallet over the CLI:
+python scripts/agent_cli.py --list-tools
+python scripts/agent_cli.py --wallet vida_secure.json --session agent_session.json \
+    vida_send --args '{"to_address": "kaspa:qq...", "amount_kas": 1.5}'
+```
+
+## Quickstart (once the Dagger module lands)
+
+```bash
 dagger develop -m dagger
 dagger call -m dagger list-tools
 dagger call -m dagger balance \
@@ -98,10 +109,10 @@ dagger call -m dagger demo \
 - [x] `vida/agent_api.py` — session-only AgentWallet with policy gate + redaction
 - [x] `vida/agent_tools.py` — framework-agnostic tool manifest + dispatcher
 - [x] `scripts/agent_cli.py` — JSON-in/JSON-out subprocess surface
-- [x] `dagger/` module scaffold — base, tool dispatcher, convenience functions
 - [x] `tests/qa_agent_tests.py` — manifest, dispatch, and redaction tests
-- [ ] Run `dagger develop` and verify against a live engine (needs Dagger installed)
-- [ ] Finish `agent_env` LLM binding once the Env input wiring is verified on 0.18
+- [ ] `dagger/` module (follow-up PR): generate with `dagger develop`, verify
+      against a live 0.18 engine, then commit — base container, tool
+      dispatcher, convenience functions, `agent_env` LLM binding
 - [ ] Persist the daily-spend ledger across restarts (TODO in `agent_api.py`)
 - [ ] Publish the module to the Daggerverse so agents can `dagger install` it
 - [ ] MCP server wrapper over the same manifest (free once this lands)

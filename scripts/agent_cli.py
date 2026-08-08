@@ -2,8 +2,9 @@
 """
 Vida agent CLI — one uniform subprocess surface for every tool call.
 
-This is the entry point the Dagger 🗡️ module execs inside its container,
-and it works identically for any orchestrator that shells out:
+This is the entry point the planned Dagger 🗡️ module will exec inside its
+sandbox container (docs/DAGGER_INTEGRATION.md), and it works identically
+today for any orchestrator that shells out:
 
     python scripts/agent_cli.py --wallet vida_secure.json \
         --session agent_session.json \

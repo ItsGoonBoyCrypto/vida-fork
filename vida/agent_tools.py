@@ -4,8 +4,9 @@ Vida agent tool manifest — framework-agnostic LLM tool definitions.
 One manifest, many bindings:
   - Anthropic tool-use: pass TOOLS straight into the `tools` parameter.
   - MCP: each entry maps 1:1 onto an MCP tool (name / description / inputSchema).
-  - Dagger 🗡️: the module in dagger/ exposes the same names as Dagger
-    functions, so `dagger call` and Dagger's LLM bindings hit the same surface.
+  - Dagger 🗡️: the planned module (docs/DAGGER_INTEGRATION.md) exposes the
+    same names as Dagger functions, so `dagger call` and Dagger's LLM
+    bindings hit this exact surface.
   - CLI: scripts/agent_cli.py dispatches by tool name for subprocess callers.
 
 Schemas here are plain JSON Schema dicts with no SDK dependency, so an LLM

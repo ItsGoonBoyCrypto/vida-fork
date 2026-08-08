@@ -1,8 +1,0 @@
-{
-  "name": "vida-agent",
-  "engineVersion": "v0.18.5",
-  "sdk": {
-    "source": "python"
-  },
-  "source": "."
-}
