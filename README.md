@@ -101,7 +101,24 @@ python scripts/grant_session.py --revoke
 ```bash
 python tests/qa_tests.py          # core wallet: 13 tests
 python tests/qa_secure_tests.py   # encryption + sessions: 11 tests
+python tests/qa_agent_tests.py    # agent tool surface: 26 checks (no network needed)
 ```
+
+## For AI agents — Dagger 🗡️ integration
+
+Vida now frames a first-class agent package: a session-only wallet API, a
+framework-agnostic LLM tool manifest, and a [Dagger](https://dagger.io) module
+that runs every wallet call in a sandboxed container — with the session file
+passed as a Dagger Secret and the seed/password never entering the sandbox at
+all. Any Dagger-speaking agent framework can discover and call the tools freely.
+
+```bash
+dagger develop -m dagger
+dagger call -m dagger list-tools
+dagger call -m dagger balance --wallet=./vida_secure.json --session=file:./agent_session.json
+```
+
+Design, security model, and status: [docs/DAGGER_INTEGRATION.md](docs/DAGGER_INTEGRATION.md)
 
 ## Architecture
 
@@ -111,10 +128,14 @@ vida/
   secure_wallet.py  # 24-word seed, scrypt+AES-GCM encryption, agent sessions
   transactions.py   # UTXO selection, mass-based fees, broadcast, verification
   ml_dsa_65.py      # post-quantum ML-DSA-65 (PQClean/pqcrypto wrapper)
+  agent_api.py      # AgentWallet: session-only, policy-gated agent surface
+  agent_tools.py    # framework-agnostic LLM tool manifest + dispatcher
 scripts/
   setup_owner_wallet.py  # owner-run: creates wallet, shows seed once
   grant_session.py       # owner-run: grants/revokes agent sessions
-tests/                   # 23 automated tests
+  agent_cli.py           # JSON-in/JSON-out tool dispatcher (used by Dagger)
+dagger/                  # Dagger 🗡️ module: sandboxed, LLM-bindable functions
+tests/                   # automated tests (core, secure, agent)
 ```
 
 ## Roadmap
@@ -122,6 +143,8 @@ tests/                   # 23 automated tests
 - [x] Core wallet: Schnorr + PQ identity, delegation modes
 - [x] Real transactions on Kaspa mainnet (see receipts above)
 - [x] Owner-custody seed + password encryption + agent sessions
+- [x] Agent tool surface (manifest + CLI) — framed, tested
+- [ ] Dagger 🗡️ module: verify against a live engine + publish to Daggerverse (scaffold in `dagger/`)
 - [ ] Covenant module (blocked on Kaspa consensus support — tracking [rusty-kaspa #1073](https://github.com/kaspanet/rusty-kaspa/issues/1073))
 - [ ] TAO (Bittensor) module
 - [ ] Bitcoin module
@@ -132,7 +155,7 @@ tests/                   # 23 automated tests
 
 ## Review it yourself
 
-This is ~1,100 lines of Python across five files. For a wallet, don't trust — read it. Start with `vida/secure_wallet.py` (encryption + sessions) and `vida/transactions.py` (signing + broadcast). Run the 24 tests. Then decide whether to fund it.
+The core wallet is ~1,100 lines of Python across five files (the agent/Dagger layer sits on top and never touches key custody). For a wallet, don't trust — read it. Start with `vida/secure_wallet.py` (encryption + sessions) and `vida/transactions.py` (signing + broadcast). Run the 24 tests. Then decide whether to fund it.
 
 ## Support the project (optional)
 
